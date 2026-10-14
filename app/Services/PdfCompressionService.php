@@ -10,9 +10,9 @@ use Symfony\Component\Process\Process;
 class PdfCompressionService
 {
     /**
-     * Minimum file size to process (10 MB in bytes).
+     * Minimum file size to process (19 MB in bytes).
      */
-    const MIN_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+    const MIN_SIZE_BYTES = 19 * 1024 * 1024; // 19 MB (19,922,944 bytes)
 
     /**
      * Max concurrent Ghostscript processes (parallel compression).
