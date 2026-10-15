@@ -1,66 +1,205 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# 📄 PressPDF - Smart Batch PDF Compression Studio
 
 <p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
+  <img src="https://img.shields.io/badge/Laravel-10.x-FF2D20?style=for-the-badge&logo=laravel&logoColor=white" alt="Laravel 10">
+  <img src="https://img.shields.io/badge/PHP-8.2+-777BB4?style=for-the-badge&logo=php&logoColor=white" alt="PHP 8.2+">
+  <img src="https://img.shields.io/badge/Engine-Ghostscript_10-black?style=for-the-badge&logo=adobe" alt="Ghostscript 10">
+  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Ready">
+  <img src="https://img.shields.io/badge/Tunnel-Cloudflare-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="Cloudflare Tunnel">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License MIT">
 </p>
 
-## About Laravel
+<p align="center">
+  <strong>Solusi Kompresi PDF Skala Besar: Cepat, Presisi, Kualitas Terjaga &amp; 100% Aman untuk Berkas Klaim BPJS Kesehatan &amp; Arsip Instansi.</strong>
+</p>
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## 📌 Sekilas Tentang PressPDF
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+**PressPDF** adalah aplikasi web modern berbasis Laravel dan native Ghostscript 10 yang dirancang khusus untuk memecahkan tantangan kompresi dokumen massal pada instansi medis, rumah sakit, dan perkantoran.
 
-## Learning Laravel
+Khususnya pada verifikasi berkas **E-Klaim BPJS Kesehatan** dan arsip digital, sistem mewajibkan:
+1. Batasan ukuran berkas maksimal tertentu (misal: di bawah **20 MB** atau **10 MB**).
+2. **Nama berkas dan kode klaim unik tidak boleh berubah sama sekali** (agar pembacaan otomatis sistem casemix/SIMRS tetap sinkron).
+3. **Struktur hierarki folder tidak boleh berantakan** saat dilakukan proses kompresi satu folder penuh.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+PressPDF hadir menjawab kebutuhan tersebut secara otomatis, terkalibrasi, aman, dan tanpa mengubah integritas kode berkas asli.
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+---
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+## 🚀 Fitur Unggulan
 
-## Laravel Sponsors
+### 1. ⚡ Ghostscript 10 Native Engine
+Ditenagai mesin Ghostscript versi terbaru dengan multi-pass dynamic DPI downsampling dan optimasi font/vektor. Proses kompresi berjalan sangat cepat (~0.6 detik per file pada server multicore) dengan kualitas visual teks dan scan dokumen yang tetap tajam.
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+### 2. 🛡️ Smart Threshold Filter (Ambang Batas 19 MB)
+- **Ukuran &ge; 19 MB**: Otomatis diproses dan dikompresi sesuai target ukuran yang dipilih.
+- **Ukuran &lt; 19 MB**: Otomatis diloloskan (*Safe Direct Passthrough*) tanpa penurunan kualitas ataupun kompresi berulang yang membuang waktu.
 
-### Premium Partners
+### 3. 🎯 Target Presets Terkalibrasi
+Pilih target ukuran dokumen dengan sekali klik:
+- **5 MB** – Kompresi agresif untuk pengiriman email & sistem kuota ketat.
+- **10 MB** – Keseimbangan optimal untuk portal berkas dan klaim digital.
+- **15 MB** – Kualitas maksimal di bawah batas portal BPJS 20 MB.
+- **Custom Slider (1.0 – 19.0 MB)** – Fleksibilitas menentukan target megabyte sesuai kebutuhan spesifik.
 
-- **[Vehikl](https://vehikl.com/)**
-- **[Tighten Co.](https://tighten.co)**
-- **[WebReinvent](https://webreinvent.com/)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel/)**
-- **[Cyber-Duck](https://cyber-duck.co.uk)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Jump24](https://jump24.co.uk)**
-- **[Redberry](https://redberry.international/laravel/)**
-- **[Active Logic](https://activelogic.com)**
-- **[byte5](https://byte5.de)**
-- **[OP.GG](https://op.gg)**
+### 4. 🔒 100% Preservasi Nama Berkas & Struktur Folder
+- Nama setiap dokumen PDF **tetap utuh 100%** persis seperti aslinya.
+- Mendukung fitur **Upload Folder** (`webkitdirectory`).
+- Seluruh subfolder tetap dipertahankan posisinya.
+- Hasil batch diunduh dalam bentuk file ZIP dengan penamaan folder luar berawalan `compres_` (contoh: `compres_Klaim_Oktober_2026.zip`).
 
-## Contributing
+### 5. 🎨 Antarmuka Modern & Ramah Pengguna
+- **Tema Gelap & Terang (Dark / Light Mode)** yang nyaman di mata.
+- Status progres interaktif per berkas secara *real-time*.
+- Ringkasan statistik penghematan memori (Total Berkas, Berkas Terkompresi, Berkas Aman, dan % Efisiensi Ruang).
+- Tabel hasil kompresi yang rapi dengan tombol unduh langsung per berkas atau unduh sekaligus dalam arsip ZIP.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+---
 
-## Code of Conduct
+## 🔄 Alur Kerja Sistem (Pipeline)
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```mermaid
+flowchart TD
+    A[Upload File / Folder PDF] --> B{Ukuran Berkas >= 19 MB?}
+    B -- Ya --> C[Proses Kompresi Ghostscript 10]
+    C --> D[Target Presets: 5MB / 10MB / 15MB]
+    D --> E[Simpan Output: Nama File Asli 100% Tetap]
+    B -- Tidak (< 19 MB) --> F[Status: Berkas Aman / Passthrough]
+    F --> E
+    E --> G[Pertahankan Hierarki Folder]
+    G --> H[Download Per Berkas / ZIP Batch: compres_folder.zip]
+```
 
-## Security Vulnerabilities
+---
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## 💻 Kebutuhan Sistem (Prerequisites)
 
-## License
+- **PHP**: `^8.1` atau `^8.2`
+  - Ekstensi yang diperlukan: `ext-gd`, `ext-zip`, `ext-bcmath`, `ext-pcntl`, `ext-mbstring`, `ext-curl`
+- **Ghostscript**: Versi 9.50+ atau **Ghostscript 10** (`gswin64c` di Windows atau `gs` di Linux)
+- **Composer**: Versi 2.x
+- **Web Server**: Nginx / Apache
+- **Docker** *(Opsional, untuk containerization)*
+- **Cloudflared** *(Opsional, untuk ekspos tunnel publik)*
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+---
+
+## 🛠️ Panduan Instalasi Lokal (Quick Start)
+
+### 1. Clone Repository
+```bash
+git clone https://github.com/yogskuyy/presspdf.git
+cd presspdf
+```
+
+### 2. Install Dependensi PHP
+```bash
+composer install
+```
+
+### 3. Konfigurasi Environment (.env)
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+### 4. Buat Symlink Storage & Direktori Temp
+```bash
+php artisan storage:link
+```
+
+Pastikan folder storage memiliki izin tulis:
+```bash
+# Pada Linux / macOS:
+chmod -R 775 storage bootstrap/cache
+```
+
+### 5. Konfigurasi `php.ini` (Penting untuk File PDF Besar)
+Pastikan batas upload pada file konfigurasi PHP Anda mencukupi:
+```ini
+upload_max_filesize = 500M
+post_max_size = 500M
+memory_limit = 512M
+max_execution_time = 600
+```
+
+### 6. Jalankan Server Pengembangan
+```bash
+php artisan serve
+```
+Akses aplikasi melalui browser di: `http://localhost:8000`
+
+---
+
+## 🌐 Publikasikan dengan Cloudflare Tunnel
+
+Jika Anda ingin membuka akses aplikasi lokal ke internet secara aman tanpa port forwarding:
+1. Pastikan `cloudflared` sudah terpasang.
+2. Jalankan skrip:
+   ```cmd
+   start-online-tunnel.bat
+   ```
+3. Salin URL publik unik Cloudflare yang muncul di terminal (contoh: `https://xxxx.trycloudflare.com`).
+
+---
+
+## 🐳 Deployment Menggunakan Docker
+
+PressPDF telah dilengkapi dengan `Dockerfile` produksi berbasis Nginx, PHP 8.2-FPM, Supervisor, dan native Ghostscript:
+
+```bash
+# Build image Docker
+docker build -t presspdf:latest .
+
+# Jalankan container
+docker run -d -p 8080:80 --name presspdf-app presspdf:latest
+```
+Aplikasi siap diakses di `http://localhost:8080`.
+
+---
+
+## 🐧 Deployment 1-Click ke VPS Ubuntu (22.04 / 24.04 LTS)
+
+Tersedia skrip otomasi [deploy-vps.sh](deploy-vps.sh) untuk deployment cepat di server VPS Ubuntu:
+```bash
+chmod +x deploy-vps.sh
+./deploy-vps.sh
+```
+Skrip ini otomatis memasang dependensi (Ghostscript, PHP 8.2, Nginx, Composer), mengonfigurasi `php.ini`, permission folder, dan *cache warm-up* Laravel.
+
+---
+
+## 📂 Struktur Direktori Utama
+
+```
+PressPDF/
+├── app/
+│   ├── Http/Controllers/
+│   │   └── PdfCompressionController.php  # Logika upload, batching, manifest, & kompresi
+│   └── Services/
+│       └── PdfCompressionService.php     # Service deteksi & eksekusi Ghostscript 10
+├── docker/
+│   ├── nginx.conf                        # Konfigurasi Nginx produksi
+│   ├── php.ini                           # Optimasi limit upload & timeout
+│   └── supervisord.conf                  # Process manager Nginx & PHP-FPM
+├── resources/views/pdf/
+│   └── index.blade.php                   # Tampilan Studio UI responsif (Blade + CSS)
+├── Dockerfile                            # Multi-stage production container
+├── deploy-vps.sh                         # Skrip otomasi deployment Ubuntu VPS
+├── start-online-tunnel.bat               # Shortcut Cloudflare Tunnel
+└── README.md                             # Dokumentasi resmi proyek
+```
+
+---
+
+## 📄 Lisensi
+
+Proyek ini dirilis di bawah lisensi [MIT License](LICENSE). Bebas digunakan, dimodifikasi, dan didistribusikan untuk keperluan personal maupun instansi.
+
+---
+
+<p align="center">
+  Dibuat dengan ❤️ untuk kemudahan pengelolaan dokumen instansi &amp; fasilitas kesehatan.
+</p>
