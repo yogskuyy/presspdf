@@ -1752,6 +1752,83 @@
         }
 
     }
+
+    /* ── DATABASE HISTORY & MONITOR STYLES ── */
+    .db-history-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: var(--radius-pill);
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-secondary);
+        font-family: var(--font-main);
+        font-size: 12.5px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: var(--shadow-sm);
+    }
+    .db-history-btn:hover {
+        background: var(--bg-elevated);
+        border-color: var(--primary);
+        color: var(--text-primary);
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-md);
+    }
+    .db-live-indicator {
+        position: relative;
+        width: 8px;
+        height: 8px;
+        background: #10b981;
+        border-radius: 50%;
+        display: inline-block;
+    }
+    .db-live-pulse {
+        position: absolute;
+        inset: -3px;
+        border-radius: 50%;
+        background: rgba(16, 185, 129, 0.4);
+        animation: pulseDot 2s infinite ease-out;
+    }
+    @keyframes pulseDot {
+        0% { transform: scale(0.9); opacity: 0.9; }
+        100% { transform: scale(2.2); opacity: 0; }
+    }
+    .db-badge {
+        font-size: 11px;
+        font-weight: 700;
+        background: var(--primary-light);
+        color: var(--primary);
+        padding: 2px 8px;
+        border-radius: 999px;
+    }
+    [data-theme="dark-titanium"] .db-badge {
+        background: rgba(99, 102, 241, 0.25);
+        color: #a5b4fc;
+    }
+    .db-history-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12.5px;
+    }
+    .db-history-table tr {
+        border-bottom: 1px solid var(--border-subtle);
+        transition: background 0.15s ease;
+    }
+    .db-history-table tbody tr:hover {
+        background: var(--bg-elevated);
+    }
+    .db-history-table td {
+        padding: 10px 8px;
+        color: var(--text-secondary);
+        vertical-align: middle;
+    }
+    .modal-card-wide {
+        max-width: 920px !important;
+        width: 95% !important;
+    }
     </style>
 <body>
 
@@ -1775,10 +1852,19 @@
             </div>
         </div>
 
-        <button type="button" class="theme-toggle-btn" id="themeSwitchBtn" onclick="toggleThemeMode()">
-            <i class="fa-solid fa-circle-half-stroke"></i>
-            <span id="themeSwitchText">Mode Gelap</span>
-        </button>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <button type="button" class="db-history-btn" id="dbHistoryBtn" onclick="openDbHistoryModal()" title="Cek riwayat tersimpan di database presspdf">
+                <span class="db-live-indicator"><span class="db-live-pulse"></span></span>
+                <i class="fa-solid fa-database" style="color: #6366f1;"></i>
+                <span class="db-label-text">Database: <strong>{{ $dbDatabase ?? 'presspdf' }}</strong></span>
+                <span class="db-badge" id="topbarDbBadge">{{ $totalJobs ?? 1 }} Data</span>
+            </button>
+
+            <button type="button" class="theme-toggle-btn" id="themeSwitchBtn" onclick="toggleThemeMode()">
+                <i class="fa-solid fa-circle-half-stroke"></i>
+                <span id="themeSwitchText">Mode Gelap</span>
+            </button>
+        </div>
     </header>
 
     <!-- STEPPER -->
@@ -2131,6 +2217,104 @@
     </div>
 </div>
 
+<!-- MODAL RIWAYAT DATABASE PRESPDF -->
+<div class="modal-backdrop" id="modalDbHistory" role="dialog" aria-modal="true">
+    <div class="modal-card modal-card-wide" style="display: flex; flex-direction: column; padding: 0; overflow: hidden; max-height: 85vh;">
+        <!-- Header -->
+        <div style="padding: 18px 24px; border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; background: var(--bg-card-solid);">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 40px; height: 40px; border-radius: 10px; background: rgba(79, 70, 229, 0.12); color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 18px;">
+                    <i class="fa-solid fa-database"></i>
+                </div>
+                <div>
+                    <h3 style="font-size: 16px; font-weight: 800; color: var(--text-primary); margin: 0; display: flex; align-items: center; gap: 8px;">
+                        Database Monitor: <span style="font-family: var(--font-mono); color: var(--primary);">{{ $dbDatabase ?? 'presspdf' }}</span>
+                        <span style="font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(16, 185, 129, 0.14); color: #059669; font-weight: 700; border: 1px solid rgba(16, 185, 129, 0.25);">
+                            <i class="fa-solid fa-circle" style="font-size: 7px; margin-right: 4px;"></i>MySQL Aktif
+                        </span>
+                    </h3>
+                    <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                        Tabel <code>compression_jobs</code> &bull; Setiap inputan baru otomatis terbaca dan tersimpan
+                    </p>
+                </div>
+            </div>
+            <button type="button" onclick="closeDbHistoryModal()" style="background: none; border: none; font-size: 20px; color: var(--text-muted); cursor: pointer; padding: 6px 10px; border-radius: 8px; transition: all 0.2s;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <!-- Metrics Strip -->
+        <div style="padding: 14px 24px; background: var(--bg-elevated); border-bottom: 1px solid var(--border-subtle); display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px;">
+            <div style="background: var(--bg-card-solid); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Total Input Tercatat</div>
+                <div style="font-size: 20px; font-weight: 800; color: var(--text-primary); font-family: var(--font-mono);" id="dbMetricTotal">0</div>
+            </div>
+            <div style="background: var(--bg-card-solid); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Status Selesai</div>
+                <div style="font-size: 20px; font-weight: 800; color: #059669; font-family: var(--font-mono);" id="dbMetricCompleted">0</div>
+            </div>
+            <div style="background: var(--bg-card-solid); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Total Penghematan</div>
+                <div style="font-size: 20px; font-weight: 800; color: var(--primary); font-family: var(--font-mono);" id="dbMetricSaved">0 B</div>
+            </div>
+            <div style="background: var(--bg-card-solid); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: flex-end;">
+                <button type="button" class="btn-secondary-pill" onclick="loadDbHistory(true)" style="padding: 8px 14px; font-size: 12px; width: 100%; justify-content: center;" id="btnRefreshDb">
+                    <i class="fa-solid fa-arrows-rotate"></i> Segarkan Data
+                </button>
+            </div>
+        </div>
+
+        <!-- Search / Filter -->
+        <div style="padding: 12px 24px 8px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+            <div style="position: relative; flex: 1; max-width: 320px;">
+                <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--text-muted);"></i>
+                <input type="text" id="dbSearchInput" placeholder="Cari nama berkas..." oninput="filterDbTable()" style="width: 100%; padding: 8px 12px 8px 34px; border-radius: 8px; border: 1px solid var(--border-subtle); background: var(--bg-base); color: var(--text-primary); font-size: 13px; font-family: var(--font-main); outline: none;">
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted);" id="dbRecordCounter">Menampilkan 0 data</div>
+        </div>
+
+        <!-- Table Container -->
+        <div style="flex: 1; overflow-y: auto; padding: 10px 24px 20px;" id="dbTableWrapper">
+            <div id="dbLoadingIndicator" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                <div class="mini-spinner" style="margin: 0 auto 12px; width: 24px; height: 24px; border-width: 3px;"></div>
+                <span>Mengambil data dari database presspdf...</span>
+            </div>
+            <table class="db-history-table" id="dbHistoryTable" style="display: none;">
+                <thead>
+                    <tr style="border-bottom: 2px solid var(--border-subtle); text-align: left; color: var(--text-muted); font-size: 11px; text-transform: uppercase;">
+                        <th style="padding: 10px 8px; width: 50px;">ID</th>
+                        <th style="padding: 10px 8px;">Waktu</th>
+                        <th style="padding: 10px 8px;">Nama Berkas</th>
+                        <th style="padding: 10px 8px;">Ukuran Asli</th>
+                        <th style="padding: 10px 8px;">Ukuran Akhir</th>
+                        <th style="padding: 10px 8px;">Hemat</th>
+                        <th style="padding: 10px 8px;">Rasio</th>
+                        <th style="padding: 10px 8px; width: 90px;">Status</th>
+                    </tr>
+                </thead>
+                <tbody id="dbHistoryTableBody">
+                    <!-- Populated dynamically -->
+                </tbody>
+            </table>
+            <div id="dbEmptyNotice" style="display: none; text-align: center; padding: 48px 16px; color: var(--text-muted);">
+                <i class="fa-solid fa-folder-open" style="font-size: 32px; opacity: 0.4; margin-bottom: 8px;"></i>
+                <div>Belum ada input berkas yang tercatat di database.</div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="padding: 12px 24px; border-top: 1px solid var(--border-subtle); background: var(--bg-card-solid); display: flex; align-items: center; justify-content: space-between;">
+            <div style="font-size: 11.5px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
+                <i class="fa-solid fa-circle-check" style="color: #10b981;"></i>
+                Setiap inputan baru di-sinkronisasi langsung ke MySQL tabel <code>compression_jobs</code>.
+            </div>
+            <button type="button" class="btn-primary-pill" onclick="closeDbHistoryModal()" style="padding: 6px 18px; font-size: 12.5px;">
+                Tutup
+            </button>
+        </div>
+    </div>
+</div>
+
 <div class="toast-tray" id="toastBox"></div>
 
 <script>
@@ -2143,6 +2327,8 @@ const NINETEEN_MB_BYTES = 19 * 1024 * 1024;
 
 const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
 const URL_COMPRESS_ENDPOINT = '{{ route("pdf.compress") }}';
+const URL_HISTORY_ENDPOINT  = '{{ route("pdf.history") }}';
+let cachedDbJobs = [];
 
 // Init theme
 if (activeTheme === 'dark-titanium') {
@@ -2601,6 +2787,7 @@ async function startBatchCompress() {
             }
 
             results.push(data);
+            refreshTopbarDbCount();
         } catch (err) {
             item.status = 'error';
             item.statusText = 'Gagal';
@@ -2621,6 +2808,7 @@ async function startBatchCompress() {
 
     if (results.length > 0) {
         showBatchResults(results, batchToken);
+        refreshTopbarDbCount();
     } else {
         showToast('Tidak ada file yang berhasil diproses.');
     }
@@ -2816,12 +3004,152 @@ function closeModal() {
     document.getElementById('modalSmall').classList.remove('show');
 }
 
+// ── DATABASE HISTORY MODAL FUNCTIONS ──
+function openDbHistoryModal() {
+    document.getElementById('modalDbHistory').classList.add('show');
+    loadDbHistory(false);
+}
+
+function closeDbHistoryModal() {
+    document.getElementById('modalDbHistory').classList.remove('show');
+}
+
+async function loadDbHistory(forceRefresh = false) {
+    const loading = document.getElementById('dbLoadingIndicator');
+    const table = document.getElementById('dbHistoryTable');
+    const emptyNotice = document.getElementById('dbEmptyNotice');
+    const btnRefresh = document.getElementById('btnRefreshDb');
+
+    if (btnRefresh) btnRefresh.disabled = true;
+    loading.style.display = 'block';
+    table.style.display = 'none';
+    emptyNotice.style.display = 'none';
+
+    try {
+        const res = await fetch(URL_HISTORY_ENDPOINT);
+        const data = await res.json();
+
+        if (!data.success) {
+            throw new Error(data.message || 'Gagal memuat database.');
+        }
+
+        cachedDbJobs = data.jobs || [];
+
+        // Update topbar badge
+        const badgeEl = document.getElementById('topbarDbBadge');
+        if (badgeEl) {
+            badgeEl.textContent = `${data.stats.total} Data`;
+        }
+
+        // Update modal metrics
+        document.getElementById('dbMetricTotal').textContent = data.stats.total;
+        document.getElementById('dbMetricCompleted').textContent = data.stats.completed;
+        document.getElementById('dbMetricSaved').textContent = data.stats.total_saved;
+
+        renderDbTable(cachedDbJobs);
+
+    } catch (err) {
+        console.error('Error fetching db history:', err);
+        loading.innerHTML = `<span style="color:#ef4444;"><i class="fa-solid fa-triangle-exclamation"></i> Gagal terhubung ke database: ${escapeHtml(err.message)}</span>`;
+    } finally {
+        if (btnRefresh) btnRefresh.disabled = false;
+    }
+}
+
+async function refreshTopbarDbCount() {
+    try {
+        const res = await fetch(URL_HISTORY_ENDPOINT + '?limit=1');
+        const data = await res.json();
+        if (data.success && data.stats) {
+            const badgeEl = document.getElementById('topbarDbBadge');
+            if (badgeEl) {
+                badgeEl.textContent = `${data.stats.total} Data`;
+            }
+        }
+    } catch (e) {}
+}
+
+function renderDbTable(jobs) {
+    const loading = document.getElementById('dbLoadingIndicator');
+    const table = document.getElementById('dbHistoryTable');
+    const tbody = document.getElementById('dbHistoryTableBody');
+    const emptyNotice = document.getElementById('dbEmptyNotice');
+    const counter = document.getElementById('dbRecordCounter');
+
+    loading.style.display = 'none';
+
+    if (!jobs || jobs.length === 0) {
+        table.style.display = 'none';
+        emptyNotice.style.display = 'block';
+        counter.textContent = '0 data';
+        return;
+    }
+
+    tbody.innerHTML = '';
+    jobs.forEach(job => {
+        const tr = document.createElement('tr');
+        const statusBadge = job.status === 'completed'
+            ? `<span class="status-pill-chip success" style="font-size: 10px; padding: 2px 7px;">Selesai</span>`
+            : `<span class="status-pill-chip error" style="font-size: 10px; padding: 2px 7px;" title="${escapeHtml(job.error_message || '')}">Gagal</span>`;
+
+        tr.innerHTML = `
+            <td style="font-family: var(--font-mono); font-weight: 700; color: var(--text-muted);">#${job.id}</td>
+            <td style="white-space: nowrap; font-size: 11px; color: var(--text-muted);">${escapeHtml(job.compressed_at || '-')}</td>
+            <td>
+                <div style="font-weight: 600; color: var(--text-primary); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(job.original_filename)}">
+                    ${escapeHtml(job.original_filename)}
+                </div>
+                ${job.original_path && job.original_path !== job.original_filename ? `<div style="font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px;">${escapeHtml(job.original_path)}</div>` : ''}
+            </td>
+            <td style="font-family: var(--font-mono);">${job.original_human}</td>
+            <td style="font-family: var(--font-mono); font-weight: 600;">${job.compressed_human}</td>
+            <td style="font-family: var(--font-mono); color: #059669;">${job.saved_human}</td>
+            <td>
+                <span style="font-family: var(--font-mono); font-weight: 700; color: ${job.compression_ratio > 0 ? 'var(--primary)' : 'var(--text-muted)'};">
+                    ${job.compression_ratio > 0 ? (job.compression_ratio + '%') : '—'}
+                </span>
+            </td>
+            <td>${statusBadge}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    counter.textContent = `Menampilkan ${jobs.length} data`;
+    table.style.display = 'table';
+    emptyNotice.style.display = 'none';
+}
+
+function filterDbTable() {
+    const q = (document.getElementById('dbSearchInput').value || '').toLowerCase().trim();
+    if (!q) {
+        renderDbTable(cachedDbJobs);
+        return;
+    }
+    const filtered = cachedDbJobs.filter(j =>
+        (j.original_filename && j.original_filename.toLowerCase().includes(q)) ||
+        (j.original_path && j.original_path.toLowerCase().includes(q)) ||
+        (j.session_id && j.session_id.toLowerCase().includes(q)) ||
+        String(j.id).includes(q)
+    );
+    renderDbTable(filtered);
+}
+
 document.getElementById('modalSmall').addEventListener('click', function(e) {
     if (e.target === this) closeModal();
 });
 
+const modalDbHist = document.getElementById('modalDbHistory');
+if (modalDbHist) {
+    modalDbHist.addEventListener('click', function(e) {
+        if (e.target === this) closeDbHistoryModal();
+    });
+}
+
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Escape') {
+        closeModal();
+        closeDbHistoryModal();
+    }
 });
 
 function showToast(msg) {

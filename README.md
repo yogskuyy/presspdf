@@ -56,6 +56,11 @@ Pilih target ukuran dokumen dengan sekali klik:
 - Ringkasan statistik penghematan memori (Total Berkas, Berkas Terkompresi, Berkas Aman, dan % Efisiensi Ruang).
 - Tabel hasil kompresi yang rapi dengan tombol unduh langsung per berkas atau unduh sekaligus dalam arsip ZIP.
 
+### 6. 🗄️ Sinkronisasi Database MySQL Otomatis & Monitor Riwayat
+- Setiap inputan berkas (baik berkas terkompresi maupun berkas aman passthrough) otomatis tercatat secara real-time ke tabel `compression_jobs` di database MySQL `presspdf`.
+- Dilengkapi **Database Monitor Modal** interaktif di topbar aplikasi untuk memantau status berkas, ukuran awal, ukuran akhir, persentase penghematan, dan timestamp pemrosesan secara langsung.
+- Dukungan endpoint API riwayat (`GET /history`) dengan format ringkasan data yang cepat dan terstruktur.
+
 ---
 
 ## 🔄 Alur Kerja Sistem (Pipeline)
@@ -69,6 +74,7 @@ flowchart TD
     B -- Tidak (< 19 MB) --> F[Status: Berkas Aman / Passthrough]
     F --> E
     E --> G[Pertahankan Hierarki Folder]
+    E --> DB[(Simpan Riwayat: MySQL presspdf)]
     G --> H[Download Per Berkas / ZIP Batch: compres_folder.zip]
 ```
 

@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CompressionJob;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -18,11 +20,24 @@ class PdfCompressionController extends Controller
      */
     public function index()
     {
-        return view('pdf.index');
+        $dbConnected = false;
+        $totalJobs   = 0;
+        $dbDatabase  = config('database.connections.mysql.database', 'presspdf');
+
+        try {
+            DB::connection()->getPdo();
+            $dbConnected = true;
+            $totalJobs   = CompressionJob::count();
+        } catch (\Throwable $e) {
+            Log::warning('Koneksi database presspdf pada index: ' . $e->getMessage());
+        }
+
+        return view('pdf.index', compact('dbConnected', 'totalJobs', 'dbDatabase'));
     }
 
     /**
      * Terima upload PDF, cek ukuran, kompres jika >= 19 MB, atau simpan berkas aman jika < 19 MB.
+     * Setiap berkas yang diproses otomatis disimpan ke database presspdf (Tabel: compression_jobs).
      */
     public function compress(Request $request): JsonResponse
     {
@@ -69,86 +84,198 @@ class PdfCompressionController extends Controller
         Storage::disk('public')->makeDirectory($uploadDir);
         $outputFull = Storage::disk('public')->path("{$uploadDir}/output.pdf");
 
-        if ($shouldCompress) {
-            $inputPath = $file->storeAs($uploadDir, 'input.pdf', 'public');
-            $inputFull = Storage::disk('public')->path($inputPath);
+        try {
+            if ($shouldCompress) {
+                $inputPath = $file->storeAs($uploadDir, 'input.pdf', 'public');
+                $inputFull = Storage::disk('public')->path($inputPath);
 
+                try {
+                    $compressed = $this->runCompression($inputFull, $outputFull, $targetMb);
+                } catch (\Throwable $e) {
+                    Log::error('runCompression threw an exception: ' . $e->getMessage());
+                    $compressed = false;
+                }
+
+                if (!$compressed || !file_exists($outputFull) || filesize($outputFull) === 0) {
+                    // Fallback: gunakan file asli jika engine gagal
+                    Log::warning("Compression failed or produced empty output. Serving original file as fallback.");
+                    copy($inputFull, $outputFull);
+                }
+
+                $compressedSize = filesize($outputFull);
+                $saved          = max(0, $size - $compressedSize);
+                $ratio          = $size > 0 ? round((1 - $compressedSize / $size) * 100, 1) : 0;
+
+                Storage::disk('public')->delete($inputPath);
+            } else {
+                // Berkas aman: simpan langsung tanpa beban kompresi
+                $file->storeAs($uploadDir, 'output.pdf', 'public');
+                $compressedSize = $size;
+                $saved          = 0;
+                $ratio          = 0;
+            }
+
+            // Catat ke manifest batch (disimpan ke disk dan sesi)
+            if ($batchToken && preg_match('/^[a-zA-Z0-9_-]{16,64}$/', $batchToken)) {
+                $batchDir = "temp/{$batchToken}";
+                Storage::disk('public')->makeDirectory($batchDir);
+                $manifestPath = Storage::disk('public')->path("{$batchDir}/manifest.json");
+
+                $items = [];
+                if (file_exists($manifestPath)) {
+                    $items = json_decode(file_get_contents($manifestPath), true) ?: [];
+                }
+
+                $entry = [
+                    'token'          => $token,
+                    'original_name'  => $filename,
+                    'output_name'    => $outputFilename,
+                    'relative_path'  => $cleanRelativePath,
+                    'folder_key'     => $folderKey,
+                    'folder_display' => $folderDisplay,
+                    'is_compressed'  => $shouldCompress,
+                    'original_size'  => $size,
+                    'final_size'     => $compressedSize,
+                    'saved_bytes'    => $saved,
+                    'ratio'          => $ratio,
+                    'storage_rel'    => "temp/{$token}/output.pdf",
+                ];
+
+                $items[] = $entry;
+                file_put_contents($manifestPath, json_encode($items, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+                session()->put("batch_{$batchToken}", $items);
+            }
+
+            // ── SIMPAN KE DATABASE PRESPDF (Tabel: compression_jobs) ───────
+            $jobRecord = null;
             try {
-                $compressed = $this->runCompression($inputFull, $outputFull, $targetMb);
-            } catch (\Throwable $e) {
-                Log::error('runCompression threw an exception: ' . $e->getMessage());
-                $compressed = false;
+                $jobRecord = CompressionJob::create([
+                    'session_id'        => $batchToken ?: $token,
+                    'original_filename' => $filename,
+                    'original_path'     => $cleanRelativePath ?: $filename,
+                    'compressed_path'   => "temp/{$token}/output.pdf",
+                    'original_size'     => $size,
+                    'compressed_size'   => $compressedSize,
+                    'compression_ratio' => $ratio,
+                    'status'            => 'completed',
+                    'error_message'     => null,
+                    'compressed_at'     => now(),
+                ]);
+                Log::info("CompressionJob berhasil disimpan ke database presspdf: ID #{$jobRecord->id} ({$filename})");
+            } catch (\Throwable $dbEx) {
+                Log::error("Gagal menyimpan CompressionJob ke database presspdf: " . $dbEx->getMessage());
             }
 
-            if (!$compressed || !file_exists($outputFull) || filesize($outputFull) === 0) {
-                // Fallback: gunakan file asli jika engine gagal
-                Log::warning("Compression failed or produced empty output. Serving original file as fallback.");
-                copy($inputFull, $outputFull);
+            return response()->json([
+                'id'                 => $jobRecord?->id,
+                'job_id'             => $jobRecord?->id,
+                'db_synced'          => $jobRecord !== null,
+                'status'             => $shouldCompress ? 'compressed' : 'safe_stored',
+                'is_compressed'      => $shouldCompress,
+                'token'              => $token,
+                'filename'           => $filename,
+                'output_name'        => $outputFilename,
+                'relative_path'      => $cleanRelativePath,
+                'folder_key'         => $folderKey,
+                'folder_display'     => $folderDisplay,
+                'target_mb'          => $targetMb,
+                'original_size'      => $size,
+                'original_human'     => $this->formatBytes($size),
+                'compressed_size'    => $compressedSize,
+                'compressed_human'   => $this->formatBytes($compressedSize),
+                'saved_human'        => $this->formatBytes($saved),
+                'ratio'              => $ratio,
+                'download_url'       => route('pdf.download', ['token' => $token, 'name' => $outputFilename]),
+                'batch_download_url' => $batchToken ? route('pdf.downloadBatch', $batchToken) : null,
+            ]);
+
+        } catch (\Throwable $e) {
+            Log::error("Error memproses berkas PDF: " . $e->getMessage());
+
+            // Catat kegagalan ke database presspdf agar tetap tercatat
+            try {
+                CompressionJob::create([
+                    'session_id'        => $batchToken ?: $token,
+                    'original_filename' => $filename,
+                    'original_path'     => $cleanRelativePath ?: $filename,
+                    'compressed_path'   => null,
+                    'original_size'     => $size,
+                    'compressed_size'   => null,
+                    'compression_ratio' => null,
+                    'status'            => 'failed',
+                    'error_message'     => substr($e->getMessage(), 0, 500),
+                    'compressed_at'     => null,
+                ]);
+            } catch (\Throwable $dbFailEx) {
+                Log::error("Gagal mencatat failed job ke database presspdf: " . $dbFailEx->getMessage());
             }
 
-            $compressedSize = filesize($outputFull);
-            $saved          = max(0, $size - $compressedSize);
-            $ratio          = $size > 0 ? round((1 - $compressedSize / $size) * 100, 1) : 0;
-
-            Storage::disk('public')->delete($inputPath);
-        } else {
-            // Berkas aman: simpan langsung tanpa beban kompresi
-            $file->storeAs($uploadDir, 'output.pdf', 'public');
-            $compressedSize = $size;
-            $saved          = 0;
-            $ratio          = 0;
+            return response()->json([
+                'message' => 'Gagal memproses file PDF: ' . $e->getMessage(),
+            ], 500);
         }
+    }
 
-        // Catat ke manifest batch (disimpan ke disk dan sesi)
-        if ($batchToken && preg_match('/^[a-zA-Z0-9_-]{16,64}$/', $batchToken)) {
-            $batchDir = "temp/{$batchToken}";
-            Storage::disk('public')->makeDirectory($batchDir);
-            $manifestPath = Storage::disk('public')->path("{$batchDir}/manifest.json");
+    /**
+     * Ambil riwayat kompresi langsung dari database presspdf (Tabel compression_jobs).
+     */
+    public function history(Request $request): JsonResponse
+    {
+        try {
+            $limit     = min(100, max(5, (int) $request->query('limit', 50)));
+            $sessionId = $request->query('session_id');
 
-            $items = [];
-            if (file_exists($manifestPath)) {
-                $items = json_decode(file_get_contents($manifestPath), true) ?: [];
+            $query = CompressionJob::query()->orderBy('id', 'desc');
+
+            if ($sessionId) {
+                $query->where('session_id', $sessionId);
             }
 
-            $entry = [
-                'token'          => $token,
-                'original_name'  => $filename,
-                'output_name'    => $outputFilename,
-                'relative_path'  => $cleanRelativePath,
-                'folder_key'     => $folderKey,
-                'folder_display' => $folderDisplay,
-                'is_compressed'  => $shouldCompress,
-                'original_size'  => $size,
-                'final_size'     => $compressedSize,
-                'saved_bytes'    => $saved,
-                'ratio'          => $ratio,
-                'storage_rel'    => "temp/{$token}/output.pdf",
-            ];
+            $jobs = $query->limit($limit)->get()->map(function ($job) {
+                $saved = max(0, $job->original_size - ($job->compressed_size ?? $job->original_size));
+                return [
+                    'id'                 => $job->id,
+                    'session_id'         => $job->session_id,
+                    'original_filename'  => $job->original_filename,
+                    'original_path'      => $job->original_path,
+                    'compressed_path'    => $job->compressed_path,
+                    'original_size'      => $job->original_size,
+                    'original_human'     => $this->formatBytes($job->original_size),
+                    'compressed_size'    => $job->compressed_size,
+                    'compressed_human'   => $job->compressed_size !== null ? $this->formatBytes($job->compressed_size) : '-',
+                    'saved_human'        => $this->formatBytes($saved),
+                    'compression_ratio'  => (float) ($job->compression_ratio ?? 0),
+                    'status'             => $job->status,
+                    'error_message'      => $job->error_message,
+                    'compressed_at'      => $job->compressed_at?->format('d M Y, H:i:s') ?? $job->created_at?->format('d M Y, H:i:s'),
+                ];
+            });
 
-            $items[] = $entry;
-            file_put_contents($manifestPath, json_encode($items, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-            session()->put("batch_{$batchToken}", $items);
+            $totalCount      = CompressionJob::count();
+            $completedCount  = CompressionJob::where('status', 'completed')->count();
+            $failedCount     = CompressionJob::where('status', 'failed')->count();
+
+            $completedJobs   = CompressionJob::where('status', 'completed')->get();
+            $totalSavedBytes = max(0, $completedJobs->sum('original_size') - $completedJobs->sum('compressed_size'));
+
+            return response()->json([
+                'success'  => true,
+                'database' => config('database.connections.mysql.database', 'presspdf'),
+                'stats'    => [
+                    'total'       => $totalCount,
+                    'completed'   => $completedCount,
+                    'failed'      => $failedCount,
+                    'total_saved' => $this->formatBytes($totalSavedBytes),
+                ],
+                'jobs'     => $jobs,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Gagal membaca riwayat dari database presspdf: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal membaca riwayat dari database: ' . $e->getMessage(),
+            ], 500);
         }
-
-        return response()->json([
-            'status'             => $shouldCompress ? 'compressed' : 'safe_stored',
-            'is_compressed'      => $shouldCompress,
-            'token'              => $token,
-            'filename'           => $filename,
-            'output_name'        => $outputFilename,
-            'relative_path'      => $cleanRelativePath,
-            'folder_key'         => $folderKey,
-            'folder_display'     => $folderDisplay,
-            'target_mb'          => $targetMb,
-            'original_size'      => $size,
-            'original_human'     => $this->formatBytes($size),
-            'compressed_size'    => $compressedSize,
-            'compressed_human'   => $this->formatBytes($compressedSize),
-            'saved_human'        => $this->formatBytes($saved),
-            'ratio'              => $ratio,
-            'download_url'       => route('pdf.download', ['token' => $token, 'name' => $outputFilename]),
-            'batch_download_url' => $batchToken ? route('pdf.downloadBatch', $batchToken) : null,
-        ]);
     }
 
     /**
