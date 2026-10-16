@@ -844,22 +844,45 @@ class PdfCompressionController extends Controller
         $candidates = [];
 
         if (PHP_OS_FAMILY === 'Windows') {
-            // Prioritaskan file konsol (*c.exe) karena Windows GUI binary (*.exe tanpa c) akan membeku jika dijalankan di background
-            $specificPaths = [
-                'C:\\Program Files\\gs\\gs10.04.0\\bin\\gswin64c.exe',
-                'C:\\Program Files (x86)\\gs\\gs10.04.0\\bin\\gswin32c.exe',
+            $searchDirs = [
+                'C:\\Program Files\\gs',
+                'C:\\Program Files (x86)\\gs',
+                'C:\\gs',
+                'D:\\Program Files\\gs',
+                'C:\\laragon\\bin\\gs',
             ];
 
-            foreach ($specificPaths as $path) {
-                if (file_exists($path)) {
-                    $this->cachedGsPath = $path;
-                    return $path;
+            foreach ($searchDirs as $dir) {
+                if (is_dir($dir)) {
+                    foreach (glob($dir . '\\*\\bin\\gswin*c.exe') ?: [] as $p) {
+                        $candidates[] = $p;
+                    }
+                    foreach (glob($dir . '\\*\\bin\\gswin*.exe') ?: [] as $p) {
+                        $candidates[] = $p;
+                    }
                 }
             }
 
-            foreach (glob('C:\\Program Files\\gs\\*\\bin\\gswin*c.exe') ?: [] as $p) {
-                $candidates[] = $p;
-            }
+            try {
+                $whereOut = trim(shell_exec('where gswin64c 2>NUL') ?? '');
+                if ($whereOut !== '') {
+                    foreach (explode("\n", str_replace("\r", "", $whereOut)) as $line) {
+                        $trimmed = trim($line);
+                        if ($trimmed !== '' && file_exists($trimmed)) {
+                            $candidates[] = $trimmed;
+                        }
+                    }
+                }
+                $whereGs = trim(shell_exec('where gs 2>NUL') ?? '');
+                if ($whereGs !== '') {
+                    foreach (explode("\n", str_replace("\r", "", $whereGs)) as $line) {
+                        $trimmed = trim($line);
+                        if ($trimmed !== '' && file_exists($trimmed)) {
+                            $candidates[] = $trimmed;
+                        }
+                    }
+                }
+            } catch (\Throwable) {}
 
             $candidates[] = 'gswin64c';
             $candidates[] = 'gswin32c';
