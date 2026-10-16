@@ -28,6 +28,9 @@ fi
 # Link storage
 php artisan storage:link --force || true
 
+# Run database migration automatically
+php artisan migrate --force || true
+
 # Cache configurations for maximum speed in production
 php artisan config:cache || true
 php artisan route:cache || true

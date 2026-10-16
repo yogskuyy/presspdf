@@ -498,15 +498,7 @@ class PdfCompressionController extends Controller
             if (!is_dir($tempDir)) {
                 @mkdir($tempDir, 0777, true);
             }
-            putenv("TEMP={$tempDir}");
-            putenv("TMP={$tempDir}");
-
-            $env = [
-                'TEMP'       => $tempDir,
-                'TMP'        => $tempDir,
-                'SYSTEMROOT' => getenv('SYSTEMROOT') ?: 'C:\\Windows',
-                'PATH'       => getenv('PATH') ?: '',
-            ];
+            $env = $this->getGsEnv($tempDir);
 
             $dpi    = $this->calculateTargetDpi($targetMb);
             $preset = $targetMb <= 5.0 ? '/screen' : '/ebook';
@@ -742,37 +734,92 @@ class PdfCompressionController extends Controller
         ];
     }
 
+    private ?string $cachedGsPath = null;
+
     private function findGhostscript(): ?string
     {
-        // Prioritaskan file konsol (*c.exe) karena Windows GUI binary (*.exe tanpa c) akan membeku jika dijalankan di background
-        $specificPaths = [
-            'C:\\Program Files\\gs\\gs10.04.0\\bin\\gswin64c.exe',
-            'C:\\Program Files (x86)\\gs\\gs10.04.0\\bin\\gswin32c.exe',
-        ];
-
-        foreach ($specificPaths as $path) {
-            if (file_exists($path)) {
-                return $path;
-            }
+        if ($this->cachedGsPath !== null) {
+            return $this->cachedGsPath === '' ? null : $this->cachedGsPath;
         }
 
-        $candidates = ['gswin64c', 'gswin32c', 'gs', '/usr/bin/gs'];
-        foreach (glob('C:\\Program Files\\gs\\*\\bin\\gswin*c.exe') ?: [] as $p) {
-            array_unshift($candidates, $p);
+        $candidates = [];
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            // Prioritaskan file konsol (*c.exe) karena Windows GUI binary (*.exe tanpa c) akan membeku jika dijalankan di background
+            $specificPaths = [
+                'C:\\Program Files\\gs\\gs10.04.0\\bin\\gswin64c.exe',
+                'C:\\Program Files (x86)\\gs\\gs10.04.0\\bin\\gswin32c.exe',
+            ];
+
+            foreach ($specificPaths as $path) {
+                if (file_exists($path)) {
+                    $this->cachedGsPath = $path;
+                    return $path;
+                }
+            }
+
+            foreach (glob('C:\\Program Files\\gs\\*\\bin\\gswin*c.exe') ?: [] as $p) {
+                $candidates[] = $p;
+            }
+
+            $candidates[] = 'gswin64c';
+            $candidates[] = 'gswin32c';
+            $candidates[] = 'gs';
+        } else {
+            // Linux / Docker / Unix environment: deteksi path standar
+            $candidates = [
+                '/usr/bin/gs',
+                '/usr/local/bin/gs',
+                '/bin/gs',
+                'gs',
+            ];
         }
 
         foreach ($candidates as $c) {
+            if (str_starts_with($c, '/') && file_exists($c) && is_executable($c)) {
+                $this->cachedGsPath = $c;
+                return $c;
+            }
+
             try {
                 $p = new Process([$c, '--version']);
                 $p->setTimeout(3);
                 $p->run();
                 if ($p->isSuccessful()) {
+                    $this->cachedGsPath = $c;
                     return $c;
                 }
             } catch (\Throwable) {}
         }
 
+        $this->cachedGsPath = '';
         return null;
+    }
+
+    private function getGsEnv(string $tempDir): array
+    {
+        putenv("TEMP={$tempDir}");
+        putenv("TMP={$tempDir}");
+        putenv("TMPDIR={$tempDir}");
+
+        $pathEnv = getenv('PATH') ?: '';
+        if (PHP_OS_FAMILY !== 'Windows') {
+            $linuxDefaults = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+            $pathEnv = $pathEnv ? ($pathEnv . ':' . $linuxDefaults) : $linuxDefaults;
+        }
+
+        $env = [
+            'TEMP'   => $tempDir,
+            'TMP'    => $tempDir,
+            'TMPDIR' => $tempDir,
+            'PATH'   => $pathEnv,
+        ];
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            $env['SYSTEMROOT'] = getenv('SYSTEMROOT') ?: 'C:\\Windows';
+        }
+
+        return $env;
     }
 
     private function calculateTargetDpi(float $targetMb): int

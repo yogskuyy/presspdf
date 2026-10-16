@@ -151,10 +151,17 @@ Jika Anda ingin membuka akses aplikasi lokal ke internet secara aman tanpa port 
 
 ---
 
-## 🐳 Deployment Menggunakan Docker
+## 🐳 Deployment Menggunakan Docker & Docker Compose
 
-PressPDF telah dilengkapi dengan `Dockerfile` produksi berbasis Nginx, PHP 8.2-FPM, Supervisor, dan native Ghostscript:
+PressPDF telah dilengkapi dengan `Dockerfile` dan `docker-compose.yml` produksi berbasis Nginx, PHP 8.2-FPM, Supervisor, native Ghostscript 10, dan database MariaDB:
 
+```bash
+# 1-Langkah deploy lengkap (App + Ghostscript + Database)
+docker compose up -d --build
+```
+Aplikasi siap diakses di `http://localhost` (port 80).
+
+Atau jika ingin menjalankan container aplikasi tunggal:
 ```bash
 # Build image Docker
 docker build -t presspdf:latest .
@@ -162,18 +169,21 @@ docker build -t presspdf:latest .
 # Jalankan container
 docker run -d -p 8080:80 --name presspdf-app presspdf:latest
 ```
-Aplikasi siap diakses di `http://localhost:8080`.
 
 ---
 
-## 🐧 Deployment 1-Click ke VPS Ubuntu (22.04 / 24.04 LTS)
+## 🐧 Deployment 1-Click ke VPS / Server Linux (Ubuntu 22.04 / 24.04 LTS)
 
-Tersedia skrip otomasi [deploy-vps.sh](deploy-vps.sh) untuk deployment cepat di server VPS Ubuntu:
+Tersedia skrip otomasi [deploy-vps.sh](deploy-vps.sh) dan template Nginx [docker/nginx-vps.conf](docker/nginx-vps.conf) untuk deployment langsung di server Linux:
 ```bash
 chmod +x deploy-vps.sh
-./deploy-vps.sh
+sudo ./deploy-vps.sh
 ```
-Skrip ini otomatis memasang dependensi (Ghostscript, PHP 8.2, Nginx, Composer), mengonfigurasi `php.ini`, permission folder, dan *cache warm-up* Laravel.
+Skrip ini otomatis:
+1. Memasang dependensi (Ghostscript, PHP 8.2 & ekstensi, Nginx, Composer).
+2. Mengonfigurasi `php.ini` & Nginx untuk upload dokumen hingga 1 GB (1024M) dan batas waktu 900 detik.
+3. Menyiapkan environment, folder penyimpanan, permission, migrasi database, dan *cache warm-up* Laravel.
+4. Template virtual host Nginx siap pakai tersedia di `docker/nginx-vps.conf`.
 
 ---
 
