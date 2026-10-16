@@ -679,48 +679,93 @@ class PdfCompressionController extends Controller
                 }
             }
 
-            // ── PASS 4: Rasterizer Fallback via pdfimage24 (HANYA jika pdfwrite belum menghasilkan ukuran < input) ──
-            if ($bestOutput === null || $bestSize >= $inputSize) {
-                if ($this->isDeviceSupported($gs, 'pdfimage24')) {
-                    Log::info("All pdfwrite passes did not reduce size. Attempting pdfimage24 raster pass...");
-                    $tempRasterOutput = $output . '.raster.pdf';
-                    @unlink($tempRasterOutput);
+            // ── PASS 4: Smart Rasterizer (Dijalankan jika berkas vektor/scan padat masih melebihi target atau >= 19 MB) ──
+            $needsRasterPass = ($bestOutput === null || $bestSize > $targetBytes || $bestSize >= $nineteenMbBytes || $bestSize >= $inputSize);
+            if ($needsRasterPass && $this->isDeviceSupported($gs, 'pdfimage24')) {
+                [$rasterDpi, $jpegQ] = $this->calculateRasterParams($targetMb, $input);
+                Log::info("Best size ({$bestSize} bytes) still exceeds target ({$targetBytes} bytes) or >= 19MB. Triggering calibrated pdfimage24 rasterizer ({$rasterDpi} DPI, Q={$jpegQ})...");
 
-                    $cmdRaster = [
-                        $gs,
-                        '-sDEVICE=pdfimage24',
-                        '-r72',
-                        '-dJPEGQ=55',
-                        '-dTextAlphaBits=2',
-                        '-dGraphicsAlphaBits=2',
-                        '-dNOPAUSE', '-dQUIET', '-dBATCH',
-                        "-sOutputFile={$tempRasterOutput}",
-                        $input,
-                    ];
+                $tempRasterOutput = $output . '.raster.pdf';
+                @unlink($tempRasterOutput);
 
-                    try {
-                        $pRaster = new Process($cmdRaster, null, $env);
-                        $pRaster->setTimeout(300);
-                        $pRaster->run();
-                        clearstatcache(true, $tempRasterOutput);
+                $cmdRaster = [
+                    $gs,
+                    '-sDEVICE=pdfimage24',
+                    "-r{$rasterDpi}",
+                    "-dJPEGQ={$jpegQ}",
+                    '-dTextAlphaBits=2',
+                    '-dGraphicsAlphaBits=2',
+                    '-dNOPAUSE', '-dQUIET', '-dBATCH',
+                    "-sOutputFile={$tempRasterOutput}",
+                    $input,
+                ];
 
-                        if ($pRaster->isSuccessful() && file_exists($tempRasterOutput) && filesize($tempRasterOutput) > 0) {
-                            $rSize = filesize($tempRasterOutput);
-                            Log::info("pdfimage24 raster pass finished. Size: {$rSize} bytes (Input: {$inputSize} bytes)");
-                            // HANYA terima jika ukurannya benar-benar lebih kecil dari input dan lebih baik dari pass sebelumnya
-                            if ($rSize < $bestSize && $rSize < $inputSize) {
-                                if ($bestOutput && $bestOutput !== $tempRasterOutput) @unlink($bestOutput);
-                                $bestSize   = $rSize;
-                                $bestOutput = $tempRasterOutput;
-                            } else {
-                                @unlink($tempRasterOutput);
-                            }
+                try {
+                    $startTimeR = microtime(true);
+                    $pRaster = new Process($cmdRaster, null, $env);
+                    $pRaster->setTimeout(300);
+                    $pRaster->run();
+                    $elapsedR = round(microtime(true) - $startTimeR, 2);
+                    clearstatcache(true, $tempRasterOutput);
+
+                    if ($pRaster->isSuccessful() && file_exists($tempRasterOutput) && filesize($tempRasterOutput) > 0) {
+                        $rSize = filesize($tempRasterOutput);
+                        Log::info("pdfimage24 raster pass ({$rasterDpi} DPI, Q={$jpegQ}) finished in {$elapsedR}s. Size: {$rSize} bytes (Previous best: {$bestSize} bytes, Target: {$targetBytes} bytes)");
+
+                        // HANYA terima jika ukurannya benar-benar lebih kecil dari input dan lebih baik dari pass sebelumnya
+                        if ($rSize < $bestSize && $rSize < $inputSize) {
+                            if ($bestOutput && $bestOutput !== $tempRasterOutput) @unlink($bestOutput);
+                            $bestSize   = $rSize;
+                            $bestOutput = $tempRasterOutput;
                         } else {
                             @unlink($tempRasterOutput);
                         }
-                    } catch (\Throwable) {
+
+                        // Jaminan Presisi: Jika hasil kompresi masih melampaui target pilihan pengguna, lakukan fine-tuning retry
+                        if ($bestSize > $targetBytes && $bestOutput !== null) {
+                            $retryDpi = max(45, (int) round($rasterDpi * 0.82));
+                            $retryQ   = max(30, (int) round($jpegQ * 0.80));
+                            Log::info("Best size ({$bestSize} bytes) still > target ({$targetBytes} bytes). Running fine-tuning raster pass ({$retryDpi} DPI, Q={$retryQ})...");
+
+                            $tempRaster2 = $output . '.raster2.pdf';
+                            @unlink($tempRaster2);
+                            $cmdRetry = [
+                                $gs,
+                                '-sDEVICE=pdfimage24',
+                                "-r{$retryDpi}",
+                                "-dJPEGQ={$retryQ}",
+                                '-dTextAlphaBits=2',
+                                '-dGraphicsAlphaBits=2',
+                                '-dNOPAUSE', '-dQUIET', '-dBATCH',
+                                "-sOutputFile={$tempRaster2}",
+                                $input,
+                            ];
+                            $pRetry = new Process($cmdRetry, null, $env);
+                            $pRetry->setTimeout(300);
+                            $pRetry->run();
+                            clearstatcache(true, $tempRaster2);
+
+                            if ($pRetry->isSuccessful() && file_exists($tempRaster2) && filesize($tempRaster2) > 0) {
+                                $rSize2 = filesize($tempRaster2);
+                                Log::info("Fine-tuning raster pass finished. Size: {$rSize2} bytes");
+                                if ($rSize2 < $bestSize && $rSize2 < $inputSize) {
+                                    if ($bestOutput && $bestOutput !== $tempRaster2) @unlink($bestOutput);
+                                    $bestSize   = $rSize2;
+                                    $bestOutput = $tempRaster2;
+                                } else {
+                                    @unlink($tempRaster2);
+                                }
+                            } else {
+                                @unlink($tempRaster2);
+                            }
+                        }
+                    } else {
+                        Log::warning("pdfimage24 raster pass failed or produced empty output.");
                         @unlink($tempRasterOutput);
                     }
+                } catch (\Throwable $e) {
+                    Log::warning("pdfimage24 raster pass error: " . $e->getMessage());
+                    @unlink($tempRasterOutput);
                 }
             }
 
@@ -951,6 +996,16 @@ class PdfCompressionController extends Controller
         return $env;
     }
 
+    private function getPdfPageCount(string $filePath): int
+    {
+        try {
+            $pdf = new \setasign\Fpdi\Tcpdf\Fpdi();
+            return (int) $pdf->setSourceFile($filePath);
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
     private function calculateTargetDpi(float $targetMb): int
     {
         [$dpi] = $this->calculateRasterParams($targetMb);
@@ -959,26 +1014,49 @@ class PdfCompressionController extends Controller
 
     /**
      * Parameter resolusi & kompresi JPEG terkalibrasi presisi tinggi:
-     * - Target 5.0 MB:  DPI 72, Q 52  -> hasil rata-rata ~4.6 MB (pasti < 5.0 MB)
-     * - Target 10.0 MB: DPI 96, Q 66  -> hasil rata-rata ~8.8 MB (pasti < 10.0 MB, teks super jelas)
-     * - Target 15.0 MB: DPI 124, Q 75 -> hasil rata-rata ~13.5 MB (pasti < 15.0 MB, mendekati dokumen asli)
+     * Menyesuaikan DPI dan JPEG quality secara dinamis berdasarkan target ukuran dan jumlah halaman berkas.
      */
-    private function calculateRasterParams(float $targetMb): array
+    private function calculateRasterParams(float $targetMb, ?string $inputPath = null): array
     {
+        $pageCount = $inputPath ? $this->getPdfPageCount($inputPath) : 0;
+
+        if ($pageCount > 0) {
+            $targetBytes = $targetMb * 1024 * 1024;
+            // Anggarkan 88% dari target untuk batas aman yang presisi
+            $bytesPerPage = ($targetBytes * 0.88) / $pageCount;
+
+            if ($bytesPerPage >= 150000) {
+                return [120, 75];
+            } elseif ($bytesPerPage >= 100000) {
+                return [110, 70];
+            } elseif ($bytesPerPage >= 60000) {
+                return [96, 65];
+            } elseif ($bytesPerPage >= 40000) {
+                return [85, 60];
+            } elseif ($bytesPerPage >= 28000) {
+                return [72, 50];
+            } elseif ($bytesPerPage >= 20000) {
+                return [54, 38];
+            } else {
+                return [48, 32];
+            }
+        }
+
+        // Fallback jika pageCount tidak diketahui
         if ($targetMb <= 5.0) {
-            return [72, 52];
+            return [60, 42];
         }
 
         if ($targetMb <= 10.0) {
             $t = ($targetMb - 5.0) / 5.0;
-            $dpi = (int) round(72 + ($t * 24)); // 72 -> 96
-            $q   = (int) round(52 + ($t * 14)); // 52 -> 66
+            $dpi = (int) round(60 + ($t * 28)); // 60 -> 88
+            $q   = (int) round(42 + ($t * 20)); // 42 -> 62
             return [$dpi, $q];
         }
 
         $t = min(1.0, ($targetMb - 10.0) / 5.0);
-        $dpi = (int) round(96 + ($t * 28)); // 96 -> 124
-        $q   = (int) round(66 + ($t * 9));  // 66 -> 75
+        $dpi = (int) round(88 + ($t * 26)); // 88 -> 114
+        $q   = (int) round(62 + ($t * 10)); // 62 -> 72
         return [$dpi, $q];
     }
 
