@@ -1852,7 +1852,21 @@
             </div>
         </div>
 
-        <div style="display: flex; align-items: center; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            @if(!empty($gsAvailable))
+                <div class="db-history-btn" style="cursor: default; border-color: rgba(5, 150, 105, 0.3); background: rgba(5, 150, 105, 0.08);" title="Ghostscript terdeteksi dan aktif: {{ $gsPath }}">
+                    <span class="db-live-indicator" style="background: rgba(5, 150, 105, 0.2);"><span class="db-live-pulse" style="background: var(--accent-green);"></span></span>
+                    <i class="fa-solid fa-bolt" style="color: var(--accent-green);"></i>
+                    <span class="db-label-text" style="color: var(--text-primary);">Engine: <strong style="color: var(--accent-green);">Ghostscript Aktif</strong></span>
+                </div>
+            @else
+                <div class="db-history-btn" style="cursor: default; border-color: rgba(225, 29, 72, 0.3); background: rgba(225, 29, 72, 0.08);" title="Ghostscript belum terpasang di Linux. Jalankan: sudo apt install -y ghostscript">
+                    <span class="db-live-indicator" style="background: rgba(225, 29, 72, 0.2);"><span class="db-live-pulse" style="background: var(--accent-red);"></span></span>
+                    <i class="fa-solid fa-triangle-exclamation" style="color: var(--accent-red);"></i>
+                    <span class="db-label-text" style="color: var(--text-primary);">Engine: <strong style="color: var(--accent-red);">GS Belum Terpasang</strong></span>
+                </div>
+            @endif
+
             <button type="button" class="db-history-btn" id="dbHistoryBtn" onclick="openDbHistoryModal()" title="Cek riwayat tersimpan di database presspdf">
                 <span class="db-live-indicator"><span class="db-live-pulse"></span></span>
                 <i class="fa-solid fa-database" style="color: #6366f1;"></i>
@@ -2864,11 +2878,11 @@ function showBatchResults(resultsList, batchToken) {
     });
 
     const totalSaved = Math.max(0, totalOrig - totalComp);
-    const totalRatio = totalOrig > 0 ? Math.round((1 - totalComp / totalOrig) * 100) : 0;
+    const totalRatio = (totalOrig > 0 && totalSaved > 0) ? Math.max(0, Math.round((totalSaved / totalOrig) * 100)) : 0;
 
     document.getElementById('statOriginal').textContent = formatBytes(totalOrig);
     document.getElementById('statCompressed').textContent = formatBytes(totalComp);
-    document.getElementById('statSavings').textContent = `-${totalRatio}% (${formatBytes(totalSaved)})`;
+    document.getElementById('statSavings').textContent = totalRatio > 0 ? `-${totalRatio}% (${formatBytes(totalSaved)})` : `0% (0 B)`;
 
     const guaranteeBox = document.createElement('div');
     guaranteeBox.className = 'folder-structure-guarantee-box';
@@ -2951,12 +2965,17 @@ function createResultRowElement(item) {
 
     const isComp = item.is_compressed;
     const displayName = item.filename || item.output_name;
+    const ratioNum = parseFloat(item.ratio) || 0;
     const badgeHtml = isComp
-        ? `<span class="status-pill-chip needs-comp" style="font-size:10.5px;">🔴 Terkompresi (-${item.ratio}%)</span>`
+        ? (ratioNum > 0
+            ? `<span class="status-pill-chip needs-comp" style="font-size:10.5px;">🔴 Terkompresi (-${ratioNum}%)</span>`
+            : `<span class="status-pill-chip safe-skip" style="font-size:10.5px;">🟢 Berkas Optimum (0%)</span>`)
         : `<span class="status-pill-chip safe-skip" style="font-size:10.5px;">🟢 Berkas Aman (&lt; 19 MB)</span>`;
 
     const sizeHtml = isComp
-        ? `<span>${formatBytes(item.original_size)} &rarr; <strong>${formatBytes(item.compressed_size)}</strong></span>`
+        ? (ratioNum > 0
+            ? `<span>${formatBytes(item.original_size)} &rarr; <strong>${formatBytes(item.compressed_size)}</strong></span>`
+            : `<span>Ukuran: <strong>${formatBytes(item.original_size)}</strong> (Sudah Optimum)</span>`)
         : `<span>Ukuran: <strong>${formatBytes(item.original_size)}</strong> (Disertakan Utuh)</span>`;
 
     const relPathHint = item.relative_path && item.relative_path !== displayName

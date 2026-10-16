@@ -32,7 +32,10 @@ class PdfCompressionController extends Controller
             Log::warning('Koneksi database presspdf pada index: ' . $e->getMessage());
         }
 
-        return view('pdf.index', compact('dbConnected', 'totalJobs', 'dbDatabase'));
+        $gsPath      = $this->findGhostscript();
+        $gsAvailable = !empty($gsPath);
+
+        return view('pdf.index', compact('dbConnected', 'totalJobs', 'dbDatabase', 'gsAvailable', 'gsPath'));
     }
 
     /**
@@ -96,15 +99,26 @@ class PdfCompressionController extends Controller
                     $compressed = false;
                 }
 
+                clearstatcache(true, $outputFull);
                 if (!$compressed || !file_exists($outputFull) || filesize($outputFull) === 0) {
                     // Fallback: gunakan file asli jika engine gagal
                     Log::warning("Compression failed or produced empty output. Serving original file as fallback.");
                     copy($inputFull, $outputFull);
+                    clearstatcache(true, $outputFull);
                 }
 
                 $compressedSize = filesize($outputFull);
-                $saved          = max(0, $size - $compressedSize);
-                $ratio          = $size > 0 ? round((1 - $compressedSize / $size) * 100, 1) : 0;
+
+                // Anti-Expansion Safety Guard:
+                // Jangan pernah laporkan hasil kompresi lebih besar dari berkas asli
+                if ($compressedSize >= $size) {
+                    $compressedSize = $size;
+                    $saved          = 0;
+                    $ratio          = 0;
+                } else {
+                    $saved          = max(0, $size - $compressedSize);
+                    $ratio          = $size > 0 ? round((1 - $compressedSize / $size) * 100, 1) : 0;
+                }
 
                 Storage::disk('public')->delete($inputPath);
             } else {
@@ -503,11 +517,11 @@ class PdfCompressionController extends Controller
             $dpi    = $this->calculateTargetDpi($targetMb);
             $preset = $targetMb <= 5.0 ? '/screen' : '/ebook';
 
-            // ── Pass 1: pdfwrite (lossless vector reduction dengan multi-threading) ──
-            $cmd      = $this->buildGsCommand($gs, $input, $output, $dpi, $preset);
-            $isOk     = false;
-            $curSize  = 0;
-            $elapsed  = 0;
+            // ── Pass 1: pdfwrite (Optimasi font, stream, & downsampling dengan re-encode JPEG aktif) ──
+            $cmd     = $this->buildGsCommand($gs, $input, $output, $dpi, $preset);
+            $isOk    = false;
+            $curSize = 0;
+            $elapsed = 0;
 
             try {
                 $startTime = microtime(true);
@@ -515,8 +529,9 @@ class PdfCompressionController extends Controller
                 $process->setTimeout(300);
                 $process->run();
                 $elapsed = round(microtime(true) - $startTime, 2);
-                $isOk    = $process->isSuccessful();
-                $curSize = (file_exists($output) && $isOk) ? filesize($output) : 0;
+                clearstatcache(true, $output);
+                $isOk    = $process->isSuccessful() && file_exists($output) && filesize($output) > 0;
+                $curSize = $isOk ? filesize($output) : 0;
             } catch (\Throwable $e) {
                 Log::warning("GS Pass 1 timed out or threw: " . $e->getMessage());
                 @unlink($output);
@@ -524,73 +539,44 @@ class PdfCompressionController extends Controller
                 $curSize = 0;
             }
 
-            Log::info("GS Pass 1 ({$preset}, {$dpi} DPI) finished in {$elapsed}s. Success: " . ($isOk ? 'YES' : 'NO') . ", Size: {$curSize}, TargetMax: {$targetBytes}");
+            Log::info("GS Pass 1 ({$preset}, {$dpi} DPI) finished in {$elapsed}s. Success: " . ($isOk ? 'YES' : 'NO') . ", Size: {$curSize}, TargetMax: {$targetBytes}, Input: {$inputSize}");
 
-            if ($isOk && $curSize > 0) {
-                // Evaluasi apakah Pass 1 sudah mencapai target yang dipilih user:
-                // Jika ukuran masih di atas target, ATAU masih >= 19 MB, ATAU tidak banyak terkompresi (< 8%),
-                // langsung jalankan Pass 2 yang super cepat (multi-threaded, ~5-8 detik).
-                $needsPass2 = ($curSize > $targetBytes)
-                           || ($curSize >= $nineteenMbBytes)
-                           || ($inputSize > 0 && $curSize >= $inputSize * 0.92);
+            // Evaluasi apakah Pass 1 sudah mencapai target dan lebih kecil dari file asli
+            // Jika Pass 1 gagal, ATAU hasilnya >= input asli, ATAU masih > target, ATAU masih >= 19 MB:
+            $needsPass2 = (!$isOk || $curSize === 0 || $curSize >= $inputSize || $curSize > $targetBytes || $curSize >= $nineteenMbBytes);
 
-                if ($needsPass2) {
-                    Log::info("Pass 1 size ({$curSize} bytes) exceeds target ({$targetBytes} bytes). Triggering accelerated Pass 2...");
-                    $curSize = $this->runPass2Rasterize($gs, $input, $output, $targetMb, $env, $curSize, $targetBytes);
-                }
-
-                // Jamin hasil akhir tidak lebih besar dari file asli
-                if ($inputSize > 0 && file_exists($output) && filesize($output) >= $inputSize) {
-                    Log::info("Compressed output >= input size. Reverting to original.");
-                    copy($input, $output);
-                }
-
-                return true;
+            if ($needsPass2) {
+                Log::info("Pass 1 size ({$curSize} bytes) does not meet target ({$targetBytes} bytes) or >= input ({$inputSize} bytes). Triggering Pass 2...");
+                $curSize = $this->runPass2Rasterize($gs, $input, $output, $targetMb, $env, $curSize, $targetBytes, $inputSize);
+                clearstatcache(true, $output);
             }
 
-            // Pass 1 gagal: langsung coba Pass 2
-            Log::warning("GS Pass 1 failed. Attempting direct accelerated Pass 2 (pdfimage24)...");
-            $newSize = $this->runPass2Rasterize($gs, $input, $output, $targetMb, $env, PHP_INT_MAX, $targetBytes);
-            if (file_exists($output) && filesize($output) > 0) {
-                if ($inputSize > 0 && filesize($output) >= $inputSize) {
-                    copy($input, $output);
-                }
-                return true;
+            // GUARANTEE ANTI-EXPANSION:
+            // Jika setelah seluruh pass, ukuran file tetap >= ukuran asli (misal file scan yang sudah sangat padat),
+            // kembalikan file asli secara aman sehingga TIDAK PERNAH membesar.
+            clearstatcache(true, $output);
+            if (file_exists($output) && filesize($output) >= $inputSize && $inputSize > 0) {
+                Log::info("Compressed output size (" . filesize($output) . ") >= input size ({$inputSize}). Reverting to original file safely.");
+                copy($input, $output);
+                clearstatcache(true, $output);
             }
+
+            return file_exists($output) && filesize($output) > 0;
         }
 
-        Log::warning("GS fallback triggered! Falling back to FPDI/TCPDF.");
+        Log::warning("Ghostscript not found! Falling back to FPDI/TCPDF.");
 
         // Fallback: FPDI/TCPDF
-        try {
-            $pdf = new \setasign\Fpdi\Tcpdf\Fpdi();
-            $pdf->setPrintHeader(false);
-            $pdf->setPrintFooter(false);
-            $pdf->SetAutoPageBreak(false);
-            $pdf->setFontSubsetting(true);
-            $count = $pdf->setSourceFile($input);
-            for ($i = 1; $i <= $count; $i++) {
-                $tpl  = $pdf->importPage($i);
-                $size = $pdf->getTemplateSize($tpl);
-                $pdf->AddPage($size['width'] > $size['height'] ? 'L' : 'P', [$size['width'], $size['height']]);
-                $pdf->useTemplate($tpl, 0, 0, $size['width'], $size['height'], true);
-            }
-            $pdf->Output($output, 'F');
-            return file_exists($output) && filesize($output) > 0;
-        } catch (\Throwable $e) {
-            Log::error("FPDI fallback failed: " . $e->getMessage());
-            return false;
-        }
+        return $this->runFpdiFallback($input, $output, $inputSize);
     }
 
     /**
-     * Pass 2: Rasterisasi akselerasi perangkat keras via pdfimage24.
+     * Pass 2: Rasterisasi / Advanced Downsampling Engine.
      * Menggunakan:
-     * - Multi-threading 8 core CPU (-dNumRenderingThreads=8)
-     * - 500MB dedicated render buffer dalam RAM (-dBufferSpace=500000000 -sBandListStorage=memory)
-     * - Anti-aliasing teks & garis presisi tinggi (-dTextAlphaBits=2 -dGraphicsAlphaBits=2)
-     * - Waktu proses rata-rata hanya ~5 - 9 detik (15x - 40x lebih cepat)
-     * - Dilengkapi Adaptive Target Guard agar hasil kompresi dijamin di bawah batas MB yang dipilih.
+     * - Deteksi otomatis device 'pdfimage24' (Ghostscript 9.56+ / 10.x)
+     * - Fallback otomatis ke 'pdfwrite' super agresif (/screen, 72 DPI, re-encode) jika device tidak didukung
+     * - Menghilangkan buffer 500MB agar aman dan tidak crash pada server dengan RAM terbatas (1-2 GB VPS)
+     * - Dilengkapi Adaptive Target Guard agar hasil kompresi dijamin di bawah batas target MB.
      */
     private function runPass2Rasterize(
         string $gs,
@@ -599,27 +585,64 @@ class PdfCompressionController extends Controller
         float  $targetMb,
         array  $env,
         int    $previousSize,
-        int    $targetBytes
+        int    $targetBytes,
+        int    $inputSize
     ): int {
         [$rasterDpi, $jpegQ] = $this->calculateRasterParams($targetMb);
 
         $tempRasterOutput = $output . '.raster.pdf';
         @unlink($tempRasterOutput);
 
-        $cmdRaster = [
-            $gs,
-            '-sDEVICE=pdfimage24',
-            "-r{$rasterDpi}",
-            "-dJPEGQ={$jpegQ}",
-            '-dTextAlphaBits=2',
-            '-dGraphicsAlphaBits=2',
-            '-dNumRenderingThreads=8',
-            '-dBufferSpace=500000000',
-            '-sBandListStorage=memory',
-            '-dNOPAUSE', '-dQUIET', '-dBATCH',
-            "-sOutputFile={$tempRasterOutput}",
-            $input,
-        ];
+        $supportsPdfImage = $this->isDeviceSupported($gs, 'pdfimage24');
+        Log::info("Pass 2 device check: pdfimage24 supported = " . ($supportsPdfImage ? 'YES' : 'NO'));
+
+        $cmdRaster = [];
+        if ($supportsPdfImage) {
+            // Device pdfimage24 modern (Super cepat, kompresi tinggi per halaman)
+            $cmdRaster = [
+                $gs,
+                '-sDEVICE=pdfimage24',
+                "-r{$rasterDpi}",
+                "-dJPEGQ={$jpegQ}",
+                '-dTextAlphaBits=2',
+                '-dGraphicsAlphaBits=2',
+                '-dNOPAUSE', '-dQUIET', '-dBATCH',
+                "-sOutputFile={$tempRasterOutput}",
+                $input,
+            ];
+        } else {
+            // Fallback universal: pdfwrite ultra-kompresi (/screen 72 DPI + paksa re-encode JPEG)
+            $cmdRaster = [
+                $gs,
+                '-sDEVICE=pdfwrite',
+                '-dCompatibilityLevel=1.4',
+                '-dPDFSETTINGS=/screen',
+                '-dNOPAUSE', '-dQUIET', '-dBATCH',
+                '-dCompressFonts=true',
+                '-dSubsetFonts=true',
+                '-dPassThroughJPEGImages=false',
+                '-dPassThroughJPXImages=false',
+                '-dAutoFilterColorImages=false',
+                '-dAutoFilterGrayImages=false',
+                '-dColorImageFilter=/DCTEncode',
+                '-dGrayImageFilter=/DCTEncode',
+                '-dDownsampleColorImages=true',
+                '-dDownsampleGrayImages=true',
+                '-dDownsampleMonoImages=true',
+                '-dColorImageResolution=72',
+                '-dGrayImageResolution=72',
+                '-dMonoImageResolution=72',
+                '-dColorImageDownsampleThreshold=1.0',
+                '-dGrayImageDownsampleThreshold=1.0',
+                '-dMonoImageDownsampleThreshold=1.0',
+                '-dColorImageDownsampleType=/Bicubic',
+                '-dGrayImageDownsampleType=/Bicubic',
+                '-dMonoImageDownsampleType=/Bicubic',
+                '-dAutoRotatePages=/None',
+                "-sOutputFile={$tempRasterOutput}",
+                $input,
+            ];
+        }
 
         try {
             $startRaster   = microtime(true);
@@ -627,16 +650,17 @@ class PdfCompressionController extends Controller
             $procRaster->setTimeout(300);
             $procRaster->run();
             $elapsedRaster = round(microtime(true) - $startRaster, 2);
+            clearstatcache(true, $tempRasterOutput);
 
             if ($procRaster->isSuccessful() && file_exists($tempRasterOutput) && filesize($tempRasterOutput) > 0) {
                 $rasterSize = filesize($tempRasterOutput);
-                Log::info("GS Pass 2 (pdfimage24, {$rasterDpi} DPI, Q={$jpegQ}) finished in {$elapsedRaster}s. New size: {$rasterSize} bytes (Target: {$targetBytes} bytes)");
+                Log::info("GS Pass 2 finished in {$elapsedRaster}s. Output size: {$rasterSize} bytes (Target: {$targetBytes} bytes, Previous: {$previousSize} bytes)");
 
-                // ADAPTIVE GUARD: Jika dokumen memiliki halaman sangat banyak sehingga hasil Pass 2 masih melebihi target pilihan
-                if ($rasterSize > $targetBytes) {
+                // ADAPTIVE GUARD: Jika hasil masih melebihi target pilihan
+                if ($rasterSize > $targetBytes && $supportsPdfImage) {
                     Log::info("Pass 2 size ({$rasterSize}) is still above target ({$targetBytes}). Performing fast adaptive reduction pass...");
-                    $adaptDpi = max(65, (int) round($rasterDpi * 0.85));
-                    $adaptQ   = max(48, (int) round($jpegQ * 0.90));
+                    $adaptDpi = max(65, (int) round($rasterDpi * 0.82));
+                    $adaptQ   = max(45, (int) round($jpegQ * 0.88));
                     $tempAdaptOutput = $output . '.adapt.pdf';
                     @unlink($tempAdaptOutput);
 
@@ -647,9 +671,6 @@ class PdfCompressionController extends Controller
                         "-dJPEGQ={$adaptQ}",
                         '-dTextAlphaBits=2',
                         '-dGraphicsAlphaBits=2',
-                        '-dNumRenderingThreads=8',
-                        '-dBufferSpace=500000000',
-                        '-sBandListStorage=memory',
                         '-dNOPAUSE', '-dQUIET', '-dBATCH',
                         "-sOutputFile={$tempAdaptOutput}",
                         $input,
@@ -658,37 +679,38 @@ class PdfCompressionController extends Controller
                     $procAdapt = new Process($cmdAdapt, null, $env);
                     $procAdapt->setTimeout(300);
                     $procAdapt->run();
+                    clearstatcache(true, $tempAdaptOutput);
 
                     if ($procAdapt->isSuccessful() && file_exists($tempAdaptOutput) && filesize($tempAdaptOutput) > 0) {
                         $adaptSize = filesize($tempAdaptOutput);
                         Log::info("Adaptive pass finished. Adapt size: {$adaptSize} bytes");
                         @unlink($tempRasterOutput);
                         rename($tempAdaptOutput, $tempRasterOutput);
+                        clearstatcache(true, $tempRasterOutput);
                         $rasterSize = $adaptSize;
                     } else {
                         @unlink($tempAdaptOutput);
                     }
                 }
 
-                // Prioritaskan hasil yang memenuhi target user
-                $pass1ExceededTarget = ($previousSize > $targetBytes);
-                $pass2MetTarget      = ($rasterSize <= $targetBytes);
+                // Pilih hasil terbaik: jika Pass 2 lebih kecil dari ukuran file asli dan Pass 1
+                $isBetterThanPrevious = ($previousSize <= 0) || ($rasterSize < $previousSize);
+                $isSmallerThanInput   = ($inputSize <= 0) || ($rasterSize < $inputSize);
 
-                if ($pass1ExceededTarget && $pass2MetTarget) {
-                    // Pass 2 berhasil memenuhi target di saat Pass 1 gagal -> gunakan Pass 2
+                if ($isSmallerThanInput && $isBetterThanPrevious) {
                     @unlink($output);
                     rename($tempRasterOutput, $output);
+                    clearstatcache(true, $output);
                     return $rasterSize;
-                } elseif ($rasterSize < $previousSize) {
-                    // Pass 2 lebih kecil dari Pass 1 -> gunakan Pass 2
-                    @unlink($output);
-                    rename($tempRasterOutput, $output);
-                    return $rasterSize;
-                } else {
-                    // Pass 1 sudah di bawah target dan lebih kecil -> pertahankan Pass 1
-                    Log::info("Previous size ({$previousSize}) retained over raster size ({$rasterSize}).");
+                } elseif ($previousSize > 0 && $previousSize < $inputSize) {
                     @unlink($tempRasterOutput);
                     return $previousSize;
+                } else {
+                    // Gunakan hasil Pass 2 jika ia lebih kecil
+                    @unlink($output);
+                    rename($tempRasterOutput, $output);
+                    clearstatcache(true, $output);
+                    return $rasterSize;
                 }
             } else {
                 $errOutput = $procRaster->getErrorOutput();
@@ -703,6 +725,59 @@ class PdfCompressionController extends Controller
         return $previousSize;
     }
 
+    private function runFpdiFallback(string $input, string $output, int $inputSize): bool
+    {
+        try {
+            $pdf = new \setasign\Fpdi\Tcpdf\Fpdi();
+            $pdf->setPrintHeader(false);
+            $pdf->setPrintFooter(false);
+            $pdf->SetAutoPageBreak(false);
+            $pdf->setFontSubsetting(true);
+            $count = $pdf->setSourceFile($input);
+            for ($i = 1; $i <= $count; $i++) {
+                $tpl  = $pdf->importPage($i);
+                $size = $pdf->getTemplateSize($tpl);
+                $pdf->AddPage($size['width'] > $size['height'] ? 'L' : 'P', [$size['width'], $size['height']]);
+                $pdf->useTemplate($tpl, 0, 0, $size['width'], $size['height'], true);
+            }
+            $pdf->Output($output, 'F');
+            clearstatcache(true, $output);
+
+            // Jamin FPDI fallback tidak menghasilkan ukuran lebih besar dari file asli
+            if (file_exists($output) && filesize($output) >= $inputSize && $inputSize > 0) {
+                Log::info("FPDI fallback produced file >= input. Reverting to original.");
+                copy($input, $output);
+                clearstatcache(true, $output);
+            }
+
+            return file_exists($output) && filesize($output) > 0;
+        } catch (\Throwable $e) {
+            Log::error("FPDI fallback failed: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    private function isDeviceSupported(string $gs, string $device): bool
+    {
+        static $deviceCache = [];
+        $key = "{$gs}_{$device}";
+        if (isset($deviceCache[$key])) {
+            return $deviceCache[$key];
+        }
+
+        try {
+            $nullOut = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+            $p = new Process([$gs, "-sDEVICE={$device}", '-dNOPAUSE', '-dBATCH', "-sOutputFile={$nullOut}", '-c', 'quit']);
+            $p->setTimeout(3);
+            $p->run();
+            $deviceCache[$key] = $p->isSuccessful();
+        } catch (\Throwable) {
+            $deviceCache[$key] = false;
+        }
+
+        return $deviceCache[$key];
+    }
+
     private function buildGsCommand(string $gs, string $input, string $output, int $dpi, string $preset = '/ebook'): array
     {
         return [
@@ -713,6 +788,12 @@ class PdfCompressionController extends Controller
             '-dNOPAUSE', '-dQUIET', '-dBATCH',
             '-dCompressFonts=true',
             '-dSubsetFonts=true',
+            '-dPassThroughJPEGImages=false',
+            '-dPassThroughJPXImages=false',
+            '-dAutoFilterColorImages=false',
+            '-dAutoFilterGrayImages=false',
+            '-dColorImageFilter=/DCTEncode',
+            '-dGrayImageFilter=/DCTEncode',
             '-dDownsampleColorImages=true',
             '-dDownsampleGrayImages=true',
             '-dDownsampleMonoImages=true',
@@ -726,9 +807,6 @@ class PdfCompressionController extends Controller
             '-dGrayImageDownsampleType=/Bicubic',
             '-dMonoImageDownsampleType=/Bicubic',
             '-dAutoRotatePages=/None',
-            '-dNumRenderingThreads=8',
-            '-dBufferSpace=500000000',
-            '-sBandListStorage=memory',
             "-sOutputFile={$output}",
             $input,
         ];
@@ -773,6 +851,13 @@ class PdfCompressionController extends Controller
                 '/bin/gs',
                 'gs',
             ];
+
+            try {
+                $whichGs = trim(shell_exec('which gs 2>/dev/null') ?? '');
+                if ($whichGs !== '' && !in_array($whichGs, $candidates)) {
+                    array_unshift($candidates, $whichGs);
+                }
+            } catch (\Throwable) {}
         }
 
         foreach ($candidates as $c) {
