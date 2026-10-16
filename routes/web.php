@@ -9,3 +9,4 @@ Route::get('/history', [PdfCompressionController::class, 'history'])->name('pdf.
 Route::get('/download/{token}', [PdfCompressionController::class, 'download'])->name('pdf.download');
 Route::get('/download-batch/{batchToken}', [PdfCompressionController::class, 'downloadBatch'])->name('pdf.downloadBatch');
 Route::get('/download-batch-folder/{batchToken}', [PdfCompressionController::class, 'downloadBatchFolder'])->name('pdf.downloadBatchFolder');
+Route::get('/check-system', [PdfCompressionController::class, 'checkSystem'])->name('pdf.checkSystem');

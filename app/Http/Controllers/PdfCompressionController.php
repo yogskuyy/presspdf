@@ -39,6 +39,79 @@ class PdfCompressionController extends Controller
     }
 
     /**
+     * Endpoint diagnostik server untuk memverifikasi kesiapan Ghostscript, commit Git, dan konfigurasi Linux.
+     */
+    public function checkSystem(Request $request)
+    {
+        $gs = $this->findGhostscript();
+        $gsVersion = null;
+        $pdfimage24 = false;
+
+        if ($gs) {
+            try {
+                $p = new Process([$gs, '--version']);
+                $p->setTimeout(3);
+                $p->run();
+                if ($p->isSuccessful()) {
+                    $gsVersion = trim($p->getOutput());
+                }
+            } catch (\Throwable) {}
+
+            $pdfimage24 = $this->isDeviceSupported($gs, 'pdfimage24');
+        }
+
+        $gitCommit = null;
+        try {
+            $pGit = new Process(['git', 'log', '-1', '--oneline']);
+            $pGit->setTimeout(3);
+            $pGit->run();
+            if ($pGit->isSuccessful()) {
+                $gitCommit = trim($pGit->getOutput());
+            }
+        } catch (\Throwable) {}
+
+        $procOpenEnabled = function_exists('proc_open');
+        $opcacheEnabled  = function_exists('opcache_get_status') && !empty(opcache_get_status());
+        $uploadMax       = ini_get('upload_max_filesize');
+        $postMax         = ini_get('post_max_size');
+        $memoryLimit     = ini_get('memory_limit');
+
+        $status = 'READY';
+        $issues = [];
+        if (!$gs) {
+            $status = 'WARNING_NO_GHOSTSCRIPT';
+            $issues[] = 'Ghostscript belum terpasang di sistem Linux ini. Jalankan: sudo apt update && sudo apt install -y ghostscript';
+        }
+        if (!$procOpenEnabled) {
+            $status = 'ERROR_PROC_OPEN';
+            $issues[] = 'Fungsi proc_open dinonaktifkan di php.ini.';
+        }
+
+        $data = [
+            'status'                => $status,
+            'git_commit_server'     => $gitCommit ?? 'unknown (bukan git clone atau git belum terpasang)',
+            'server_base_path'      => base_path(),
+            'ghostscript_installed' => !empty($gs),
+            'ghostscript_path'      => $gs ?? 'TIDAK DITEMUKAN',
+            'ghostscript_version'   => $gsVersion ?? 'N/A',
+            'pdfimage24_supported'  => $pdfimage24,
+            'proc_open_enabled'     => $procOpenEnabled,
+            'opcache_enabled'       => $opcacheEnabled,
+            'php_version'           => PHP_VERSION,
+            'upload_max_filesize'   => $uploadMax,
+            'post_max_size'         => $postMax,
+            'memory_limit'          => $memoryLimit,
+            'issues'                => $issues,
+        ];
+
+        if ($request->wantsJson()) {
+            return response()->json($data);
+        }
+
+        return response()->view('pdf.check_system', compact('data'));
+    }
+
+    /**
      * Terima upload PDF, cek ukuran, kompres jika >= 19 MB, atau simpan berkas aman jika < 19 MB.
      * Setiap berkas yang diproses otomatis disimpan ke database presspdf (Tabel: compression_jobs).
      */
@@ -527,7 +600,7 @@ class PdfCompressionController extends Controller
             // ── PASS 1: pdfwrite Standard Balanced (/ebook atau /screen sesuai target, downsampling resolusi target) ──
             $pass1Output = $output . '.pass1.pdf';
             @unlink($pass1Output);
-            $dpiPass1    = $this->calculateTargetDpi($targetMb);
+            $dpiPass1    = $this->calculateTargetDpi($targetMb, $input);
             $presetPass1 = $targetMb <= 5.0 ? '/screen' : '/ebook';
             $cmdPass1    = $this->buildGsCommand($gs, $input, $pass1Output, $dpiPass1, $presetPass1);
 
