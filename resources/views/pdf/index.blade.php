@@ -2861,8 +2861,10 @@ function showBatchResults(resultsList, batchToken) {
     const folderGroups = {};
 
     resultsList.forEach(item => {
-        totalOrig += (item.original_size || 0);
-        totalComp += (item.compressed_size || item.final_size || item.original_size || 0);
+        const orig = item.original_size || 0;
+        const comp = Math.min(orig, (item.compressed_size || item.final_size || orig));
+        totalOrig += orig;
+        totalComp += comp;
         if (item.is_compressed) totalCompressedCount++;
         else totalSafeCount++;
 
@@ -2965,18 +2967,22 @@ function createResultRowElement(item) {
 
     const isComp = item.is_compressed;
     const displayName = item.filename || item.output_name;
+    const origSize = item.original_size || 0;
+    const finalSize = Math.min(origSize, (item.compressed_size || item.final_size || origSize));
     const ratioNum = parseFloat(item.ratio) || 0;
-    const badgeHtml = isComp
-        ? (ratioNum > 0
-            ? `<span class="status-pill-chip needs-comp" style="font-size:10.5px;">🔴 Terkompresi (-${ratioNum}%)</span>`
-            : `<span class="status-pill-chip safe-skip" style="font-size:10.5px;">🟢 Berkas Optimum (0%)</span>`)
-        : `<span class="status-pill-chip safe-skip" style="font-size:10.5px;">🟢 Berkas Aman (&lt; 19 MB)</span>`;
+    const isActuallyReduced = isComp && ratioNum > 0 && finalSize < origSize;
 
-    const sizeHtml = isComp
-        ? (ratioNum > 0
-            ? `<span>${formatBytes(item.original_size)} &rarr; <strong>${formatBytes(item.compressed_size)}</strong></span>`
-            : `<span>Ukuran: <strong>${formatBytes(item.original_size)}</strong> (Sudah Optimum)</span>`)
-        : `<span>Ukuran: <strong>${formatBytes(item.original_size)}</strong> (Disertakan Utuh)</span>`;
+    const badgeHtml = isActuallyReduced
+        ? `<span class="status-pill-chip needs-comp" style="font-size:10.5px;">🔴 Terkompresi (-${ratioNum}%)</span>`
+        : (isComp
+            ? `<span class="status-pill-chip safe-skip" style="font-size:10.5px;">🟢 Berkas Optimum (0%)</span>`
+            : `<span class="status-pill-chip safe-skip" style="font-size:10.5px;">🟢 Berkas Aman (&lt; 19 MB)</span>`);
+
+    const sizeHtml = isActuallyReduced
+        ? `<span>${formatBytes(origSize)} &rarr; <strong>${formatBytes(finalSize)}</strong></span>`
+        : (isComp
+            ? `<span>Ukuran: <strong>${formatBytes(origSize)}</strong> (Sudah Optimum)</span>`
+            : `<span>Ukuran: <strong>${formatBytes(origSize)}</strong> (Disertakan Utuh)</span>`);
 
     const relPathHint = item.relative_path && item.relative_path !== displayName
         ? `<div style="font-size:11px; font-family:var(--font-mono); color:var(--text-muted); margin-top:2px;">

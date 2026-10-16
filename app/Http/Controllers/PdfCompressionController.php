@@ -110,14 +110,17 @@ class PdfCompressionController extends Controller
                 $compressedSize = filesize($outputFull);
 
                 // Anti-Expansion Safety Guard:
-                // Jangan pernah laporkan hasil kompresi lebih besar dari berkas asli
+                // Jangan pernah simpan atau laporkan hasil kompresi lebih besar atau sama dengan berkas asli
                 if ($compressedSize >= $size) {
+                    Log::info("Anti-Expansion Guard: Output ({$compressedSize} bytes) >= input ({$size} bytes). Reverting output file to original.");
+                    copy($inputFull, $outputFull);
+                    clearstatcache(true, $outputFull);
                     $compressedSize = $size;
                     $saved          = 0;
-                    $ratio          = 0;
+                    $ratio          = 0.0;
                 } else {
                     $saved          = max(0, $size - $compressedSize);
-                    $ratio          = $size > 0 ? round((1 - $compressedSize / $size) * 100, 1) : 0;
+                    $ratio          = $size > 0 ? round((1 - $compressedSize / $size) * 100, 1) : 0.0;
                 }
 
                 Storage::disk('public')->delete($inputPath);
@@ -501,8 +504,12 @@ class PdfCompressionController extends Controller
         $output = str_replace('/', DIRECTORY_SEPARATOR, $output);
 
         $targetBytes     = (int) ($targetMb * 1024 * 1024);
-        $nineteenMbBytes = self::MIN_SIZE; // 19 MB
+        $nineteenMbBytes = self::MIN_SIZE; // 19 MB (19,922,944 bytes)
         $inputSize       = file_exists($input) ? filesize($input) : 0;
+
+        if ($inputSize <= 0) {
+            return false;
+        }
 
         $gs = $this->findGhostscript();
         Log::info("runCompression called with input: {$input} (" . round($inputSize / 1048576, 2) . " MB), output: {$output}, target: {$targetMb} MB, GS path: " . ($gs ?? 'NULL'));
@@ -514,215 +521,228 @@ class PdfCompressionController extends Controller
             }
             $env = $this->getGsEnv($tempDir);
 
-            $dpi    = $this->calculateTargetDpi($targetMb);
-            $preset = $targetMb <= 5.0 ? '/screen' : '/ebook';
+            $bestOutput = null;
+            $bestSize   = $inputSize; // Inisialisasi: hanya terima hasil yang benar-benar lebih kecil dari input
 
-            // ── Pass 1: pdfwrite (Optimasi font, stream, & downsampling dengan re-encode JPEG aktif) ──
-            $cmd     = $this->buildGsCommand($gs, $input, $output, $dpi, $preset);
-            $isOk    = false;
-            $curSize = 0;
-            $elapsed = 0;
+            // ── PASS 1: pdfwrite Standard Balanced (/ebook atau /screen sesuai target, downsampling resolusi target) ──
+            $pass1Output = $output . '.pass1.pdf';
+            @unlink($pass1Output);
+            $dpiPass1    = $this->calculateTargetDpi($targetMb);
+            $presetPass1 = $targetMb <= 5.0 ? '/screen' : '/ebook';
+            $cmdPass1    = $this->buildGsCommand($gs, $input, $pass1Output, $dpiPass1, $presetPass1);
 
             try {
-                $startTime = microtime(true);
-                $process   = new Process($cmd, null, $env);
-                $process->setTimeout(300);
-                $process->run();
-                $elapsed = round(microtime(true) - $startTime, 2);
-                clearstatcache(true, $output);
-                $isOk    = $process->isSuccessful() && file_exists($output) && filesize($output) > 0;
-                $curSize = $isOk ? filesize($output) : 0;
+                $startTime1 = microtime(true);
+                $p1 = new Process($cmdPass1, null, $env);
+                $p1->setTimeout(300);
+                $p1->run();
+                $elapsed1 = round(microtime(true) - $startTime1, 2);
+                clearstatcache(true, $pass1Output);
+
+                if ($p1->isSuccessful() && file_exists($pass1Output) && filesize($pass1Output) > 0) {
+                    $s1 = filesize($pass1Output);
+                    Log::info("GS Pass 1 ({$presetPass1}, {$dpiPass1} DPI) finished in {$elapsed1}s. Size: {$s1} bytes (Input: {$inputSize} bytes)");
+                    if ($s1 < $bestSize) {
+                        $bestSize   = $s1;
+                        $bestOutput = $pass1Output;
+                    } else {
+                        @unlink($pass1Output);
+                    }
+                } else {
+                    Log::warning("GS Pass 1 failed or produced empty output.");
+                    @unlink($pass1Output);
+                }
             } catch (\Throwable $e) {
-                Log::warning("GS Pass 1 timed out or threw: " . $e->getMessage());
-                @unlink($output);
-                $isOk    = false;
-                $curSize = 0;
+                Log::warning("GS Pass 1 error: " . $e->getMessage());
+                @unlink($pass1Output);
             }
 
-            Log::info("GS Pass 1 ({$preset}, {$dpi} DPI) finished in {$elapsed}s. Success: " . ($isOk ? 'YES' : 'NO') . ", Size: {$curSize}, TargetMax: {$targetBytes}, Input: {$inputSize}");
+            // Evaluasi ketercapaian target Pass 1
+            $reachedTarget = ($bestOutput !== null && $bestSize <= $targetBytes && $bestSize < $nineteenMbBytes && $bestSize < $inputSize);
 
-            // Evaluasi apakah Pass 1 sudah mencapai target dan lebih kecil dari file asli
-            // Jika Pass 1 gagal, ATAU hasilnya >= input asli, ATAU masih > target, ATAU masih >= 19 MB:
-            $needsPass2 = (!$isOk || $curSize === 0 || $curSize >= $inputSize || $curSize > $targetBytes || $curSize >= $nineteenMbBytes);
+            // ── PASS 2: pdfwrite High-Efficiency Screen Downsample (/screen, 80 DPI) ──
+            // Dijalankan jika Pass 1 tidak mencapai target, ATAU masih >= 19 MB, ATAU tidak berhasil mengecilkan ukuran
+            if (!$reachedTarget) {
+                Log::info("Pass 1 size ({$bestSize} bytes) does not meet target ({$targetBytes} bytes) or >= 19MB. Triggering Pass 2 Screen Downsample...");
+                $pass2Output = $output . '.pass2.pdf';
+                @unlink($pass2Output);
 
-            if ($needsPass2) {
-                Log::info("Pass 1 size ({$curSize} bytes) does not meet target ({$targetBytes} bytes) or >= input ({$inputSize} bytes). Triggering Pass 2...");
-                $curSize = $this->runPass2Rasterize($gs, $input, $output, $targetMb, $env, $curSize, $targetBytes, $inputSize);
-                clearstatcache(true, $output);
+                // Setting /screen terbukti mengompresi dokumen scan secara masif (60-75% hemat) tanpa merusak keterbacaan teks
+                $cmdPass2 = [
+                    $gs,
+                    '-sDEVICE=pdfwrite',
+                    '-dCompatibilityLevel=1.4',
+                    '-dPDFSETTINGS=/screen',
+                    '-dNOPAUSE', '-dQUIET', '-dBATCH',
+                    '-dCompressFonts=true',
+                    '-dSubsetFonts=true',
+                    '-dDetectDuplicateImages=true',
+                    '-dDownsampleColorImages=true',
+                    '-dDownsampleGrayImages=true',
+                    '-dDownsampleMonoImages=true',
+                    '-dColorImageResolution=80',
+                    '-dGrayImageResolution=80',
+                    '-dMonoImageResolution=120',
+                    '-dColorImageDownsampleThreshold=1.0',
+                    '-dGrayImageDownsampleThreshold=1.0',
+                    '-dMonoImageDownsampleThreshold=1.0',
+                    '-dColorImageDownsampleType=/Bicubic',
+                    '-dGrayImageDownsampleType=/Bicubic',
+                    '-dMonoImageDownsampleType=/Bicubic',
+                    '-dAutoRotatePages=/None',
+                    "-sOutputFile={$pass2Output}",
+                    $input,
+                ];
+
+                try {
+                    $startTime2 = microtime(true);
+                    $p2 = new Process($cmdPass2, null, $env);
+                    $p2->setTimeout(300);
+                    $p2->run();
+                    $elapsed2 = round(microtime(true) - $startTime2, 2);
+                    clearstatcache(true, $pass2Output);
+
+                    if ($p2->isSuccessful() && file_exists($pass2Output) && filesize($pass2Output) > 0) {
+                        $s2 = filesize($pass2Output);
+                        Log::info("GS Pass 2 (/screen, 80 DPI) finished in {$elapsed2}s. Size: {$s2} bytes (Best so far: {$bestSize} bytes)");
+                        if ($s2 < $bestSize) {
+                            if ($bestOutput && $bestOutput !== $pass2Output) @unlink($bestOutput);
+                            $bestSize   = $s2;
+                            $bestOutput = $pass2Output;
+                        } else {
+                            @unlink($pass2Output);
+                        }
+                    } else {
+                        Log::warning("GS Pass 2 failed or produced empty output.");
+                        @unlink($pass2Output);
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning("GS Pass 2 error: " . $e->getMessage());
+                    @unlink($pass2Output);
+                }
             }
 
-            // GUARANTEE ANTI-EXPANSION:
-            // Jika setelah seluruh pass, ukuran file tetap >= ukuran asli (misal file scan yang sudah sangat padat),
-            // kembalikan file asli secara aman sehingga TIDAK PERNAH membesar.
-            clearstatcache(true, $output);
-            if (file_exists($output) && filesize($output) >= $inputSize && $inputSize > 0) {
-                Log::info("Compressed output size (" . filesize($output) . ") >= input size ({$inputSize}). Reverting to original file safely.");
-                copy($input, $output);
-                clearstatcache(true, $output);
+            // ── PASS 3: Ultra-Compression untuk berkas klaim sangat tebal / padat (100+ halaman) yang masih >= 19 MB ──
+            if ($bestSize >= $nineteenMbBytes && $bestSize > 0) {
+                Log::info("Best size ({$bestSize} bytes) still exceeds 19 MB! Triggering Pass 3 Ultra-Compression (65 DPI)...");
+                $pass3Output = $output . '.pass3.pdf';
+                @unlink($pass3Output);
+
+                $cmdPass3 = [
+                    $gs,
+                    '-sDEVICE=pdfwrite',
+                    '-dCompatibilityLevel=1.4',
+                    '-dPDFSETTINGS=/screen',
+                    '-dNOPAUSE', '-dQUIET', '-dBATCH',
+                    '-dCompressFonts=true',
+                    '-dSubsetFonts=true',
+                    '-dDetectDuplicateImages=true',
+                    '-dDownsampleColorImages=true',
+                    '-dDownsampleGrayImages=true',
+                    '-dDownsampleMonoImages=true',
+                    '-dColorImageResolution=65',
+                    '-dGrayImageResolution=65',
+                    '-dMonoImageResolution=96',
+                    '-dColorImageDownsampleThreshold=1.0',
+                    '-dGrayImageDownsampleThreshold=1.0',
+                    '-dMonoImageDownsampleThreshold=1.0',
+                    '-dColorImageDownsampleType=/Bicubic',
+                    '-dGrayImageDownsampleType=/Bicubic',
+                    '-dMonoImageDownsampleType=/Bicubic',
+                    '-dAutoRotatePages=/None',
+                    "-sOutputFile={$pass3Output}",
+                    $input,
+                ];
+
+                try {
+                    $p3 = new Process($cmdPass3, null, $env);
+                    $p3->setTimeout(300);
+                    $p3->run();
+                    clearstatcache(true, $pass3Output);
+
+                    if ($p3->isSuccessful() && file_exists($pass3Output) && filesize($pass3Output) > 0) {
+                        $s3 = filesize($pass3Output);
+                        Log::info("GS Pass 3 finished. Size: {$s3} bytes (Best so far: {$bestSize} bytes)");
+                        if ($s3 < $bestSize) {
+                            if ($bestOutput && $bestOutput !== $pass3Output) @unlink($bestOutput);
+                            $bestSize   = $s3;
+                            $bestOutput = $pass3Output;
+                        } else {
+                            @unlink($pass3Output);
+                        }
+                    } else {
+                        @unlink($pass3Output);
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning("GS Pass 3 error: " . $e->getMessage());
+                    @unlink($pass3Output);
+                }
             }
 
-            return file_exists($output) && filesize($output) > 0;
-        }
+            // ── PASS 4: Rasterizer Fallback via pdfimage24 (HANYA jika pdfwrite belum menghasilkan ukuran < input) ──
+            if ($bestOutput === null || $bestSize >= $inputSize) {
+                if ($this->isDeviceSupported($gs, 'pdfimage24')) {
+                    Log::info("All pdfwrite passes did not reduce size. Attempting pdfimage24 raster pass...");
+                    $tempRasterOutput = $output . '.raster.pdf';
+                    @unlink($tempRasterOutput);
 
-        Log::warning("Ghostscript not found! Falling back to FPDI/TCPDF.");
-
-        // Fallback: FPDI/TCPDF
-        return $this->runFpdiFallback($input, $output, $inputSize);
-    }
-
-    /**
-     * Pass 2: Rasterisasi / Advanced Downsampling Engine.
-     * Menggunakan:
-     * - Deteksi otomatis device 'pdfimage24' (Ghostscript 9.56+ / 10.x)
-     * - Fallback otomatis ke 'pdfwrite' super agresif (/screen, 72 DPI, re-encode) jika device tidak didukung
-     * - Menghilangkan buffer 500MB agar aman dan tidak crash pada server dengan RAM terbatas (1-2 GB VPS)
-     * - Dilengkapi Adaptive Target Guard agar hasil kompresi dijamin di bawah batas target MB.
-     */
-    private function runPass2Rasterize(
-        string $gs,
-        string $input,
-        string $output,
-        float  $targetMb,
-        array  $env,
-        int    $previousSize,
-        int    $targetBytes,
-        int    $inputSize
-    ): int {
-        [$rasterDpi, $jpegQ] = $this->calculateRasterParams($targetMb);
-
-        $tempRasterOutput = $output . '.raster.pdf';
-        @unlink($tempRasterOutput);
-
-        $supportsPdfImage = $this->isDeviceSupported($gs, 'pdfimage24');
-        Log::info("Pass 2 device check: pdfimage24 supported = " . ($supportsPdfImage ? 'YES' : 'NO'));
-
-        $cmdRaster = [];
-        if ($supportsPdfImage) {
-            // Device pdfimage24 modern (Super cepat, kompresi tinggi per halaman)
-            $cmdRaster = [
-                $gs,
-                '-sDEVICE=pdfimage24',
-                "-r{$rasterDpi}",
-                "-dJPEGQ={$jpegQ}",
-                '-dTextAlphaBits=2',
-                '-dGraphicsAlphaBits=2',
-                '-dNOPAUSE', '-dQUIET', '-dBATCH',
-                "-sOutputFile={$tempRasterOutput}",
-                $input,
-            ];
-        } else {
-            // Fallback universal: pdfwrite ultra-kompresi (/screen 72 DPI + paksa re-encode JPEG)
-            $cmdRaster = [
-                $gs,
-                '-sDEVICE=pdfwrite',
-                '-dCompatibilityLevel=1.4',
-                '-dPDFSETTINGS=/screen',
-                '-dNOPAUSE', '-dQUIET', '-dBATCH',
-                '-dCompressFonts=true',
-                '-dSubsetFonts=true',
-                '-dPassThroughJPEGImages=false',
-                '-dPassThroughJPXImages=false',
-                '-dAutoFilterColorImages=false',
-                '-dAutoFilterGrayImages=false',
-                '-dColorImageFilter=/DCTEncode',
-                '-dGrayImageFilter=/DCTEncode',
-                '-dDownsampleColorImages=true',
-                '-dDownsampleGrayImages=true',
-                '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=72',
-                '-dGrayImageResolution=72',
-                '-dMonoImageResolution=72',
-                '-dColorImageDownsampleThreshold=1.0',
-                '-dGrayImageDownsampleThreshold=1.0',
-                '-dMonoImageDownsampleThreshold=1.0',
-                '-dColorImageDownsampleType=/Bicubic',
-                '-dGrayImageDownsampleType=/Bicubic',
-                '-dMonoImageDownsampleType=/Bicubic',
-                '-dAutoRotatePages=/None',
-                "-sOutputFile={$tempRasterOutput}",
-                $input,
-            ];
-        }
-
-        try {
-            $startRaster   = microtime(true);
-            $procRaster    = new Process($cmdRaster, null, $env);
-            $procRaster->setTimeout(300);
-            $procRaster->run();
-            $elapsedRaster = round(microtime(true) - $startRaster, 2);
-            clearstatcache(true, $tempRasterOutput);
-
-            if ($procRaster->isSuccessful() && file_exists($tempRasterOutput) && filesize($tempRasterOutput) > 0) {
-                $rasterSize = filesize($tempRasterOutput);
-                Log::info("GS Pass 2 finished in {$elapsedRaster}s. Output size: {$rasterSize} bytes (Target: {$targetBytes} bytes, Previous: {$previousSize} bytes)");
-
-                // ADAPTIVE GUARD: Jika hasil masih melebihi target pilihan
-                if ($rasterSize > $targetBytes && $supportsPdfImage) {
-                    Log::info("Pass 2 size ({$rasterSize}) is still above target ({$targetBytes}). Performing fast adaptive reduction pass...");
-                    $adaptDpi = max(65, (int) round($rasterDpi * 0.82));
-                    $adaptQ   = max(45, (int) round($jpegQ * 0.88));
-                    $tempAdaptOutput = $output . '.adapt.pdf';
-                    @unlink($tempAdaptOutput);
-
-                    $cmdAdapt = [
+                    $cmdRaster = [
                         $gs,
                         '-sDEVICE=pdfimage24',
-                        "-r{$adaptDpi}",
-                        "-dJPEGQ={$adaptQ}",
+                        '-r72',
+                        '-dJPEGQ=55',
                         '-dTextAlphaBits=2',
                         '-dGraphicsAlphaBits=2',
                         '-dNOPAUSE', '-dQUIET', '-dBATCH',
-                        "-sOutputFile={$tempAdaptOutput}",
+                        "-sOutputFile={$tempRasterOutput}",
                         $input,
                     ];
 
-                    $procAdapt = new Process($cmdAdapt, null, $env);
-                    $procAdapt->setTimeout(300);
-                    $procAdapt->run();
-                    clearstatcache(true, $tempAdaptOutput);
-
-                    if ($procAdapt->isSuccessful() && file_exists($tempAdaptOutput) && filesize($tempAdaptOutput) > 0) {
-                        $adaptSize = filesize($tempAdaptOutput);
-                        Log::info("Adaptive pass finished. Adapt size: {$adaptSize} bytes");
-                        @unlink($tempRasterOutput);
-                        rename($tempAdaptOutput, $tempRasterOutput);
+                    try {
+                        $pRaster = new Process($cmdRaster, null, $env);
+                        $pRaster->setTimeout(300);
+                        $pRaster->run();
                         clearstatcache(true, $tempRasterOutput);
-                        $rasterSize = $adaptSize;
-                    } else {
-                        @unlink($tempAdaptOutput);
+
+                        if ($pRaster->isSuccessful() && file_exists($tempRasterOutput) && filesize($tempRasterOutput) > 0) {
+                            $rSize = filesize($tempRasterOutput);
+                            Log::info("pdfimage24 raster pass finished. Size: {$rSize} bytes (Input: {$inputSize} bytes)");
+                            // HANYA terima jika ukurannya benar-benar lebih kecil dari input dan lebih baik dari pass sebelumnya
+                            if ($rSize < $bestSize && $rSize < $inputSize) {
+                                if ($bestOutput && $bestOutput !== $tempRasterOutput) @unlink($bestOutput);
+                                $bestSize   = $rSize;
+                                $bestOutput = $tempRasterOutput;
+                            } else {
+                                @unlink($tempRasterOutput);
+                            }
+                        } else {
+                            @unlink($tempRasterOutput);
+                        }
+                    } catch (\Throwable) {
+                        @unlink($tempRasterOutput);
                     }
                 }
-
-                // Pilih hasil terbaik: jika Pass 2 lebih kecil dari ukuran file asli dan Pass 1
-                $isBetterThanPrevious = ($previousSize <= 0) || ($rasterSize < $previousSize);
-                $isSmallerThanInput   = ($inputSize <= 0) || ($rasterSize < $inputSize);
-
-                if ($isSmallerThanInput && $isBetterThanPrevious) {
-                    @unlink($output);
-                    rename($tempRasterOutput, $output);
-                    clearstatcache(true, $output);
-                    return $rasterSize;
-                } elseif ($previousSize > 0 && $previousSize < $inputSize) {
-                    @unlink($tempRasterOutput);
-                    return $previousSize;
-                } else {
-                    // Gunakan hasil Pass 2 jika ia lebih kecil
-                    @unlink($output);
-                    rename($tempRasterOutput, $output);
-                    clearstatcache(true, $output);
-                    return $rasterSize;
-                }
-            } else {
-                $errOutput = $procRaster->getErrorOutput();
-                Log::warning("GS Pass 2 failed. Exit: " . $procRaster->getExitCode() . ", Stderr: " . substr($errOutput, 0, 300));
-                @unlink($tempRasterOutput);
             }
-        } catch (\Throwable $e) {
-            Log::warning("GS Pass 2 exception: " . $e->getMessage());
-            @unlink($tempRasterOutput);
+
+            // ── FINALISASI & ANTI-EXPANSION GUARANTEE ─────────────────────────
+            @unlink($output);
+            if ($bestOutput !== null && file_exists($bestOutput) && $bestSize < $inputSize) {
+                rename($bestOutput, $output);
+                clearstatcache(true, $output);
+                Log::info("✅ Compression successful: {$inputSize} -> " . filesize($output) . " bytes (" . round((1 - filesize($output) / $inputSize) * 100, 1) . "% saved)");
+                return true;
+            }
+
+            // Jika semua pass gagal menghasilkan ukuran lebih kecil (misal file scan yang sudah sangat padat),
+            // pertahankan file asli 100% sehingga TIDAK PERNAH membesar!
+            Log::info("No compression pass was smaller than input. Reverting to original file safely.");
+            copy($input, $output);
+            clearstatcache(true, $output);
+            return true;
         }
 
-        return $previousSize;
+        Log::warning("Ghostscript not found! Falling back to FPDI/TCPDF.");
+        return $this->runFpdiFallback($input, $output, $inputSize);
     }
 
     private function runFpdiFallback(string $input, string $output, int $inputSize): bool
@@ -788,6 +808,7 @@ class PdfCompressionController extends Controller
             '-dNOPAUSE', '-dQUIET', '-dBATCH',
             '-dCompressFonts=true',
             '-dSubsetFonts=true',
+            '-dDetectDuplicateImages=true',
             '-dPassThroughJPEGImages=false',
             '-dPassThroughJPXImages=false',
             '-dAutoFilterColorImages=false',

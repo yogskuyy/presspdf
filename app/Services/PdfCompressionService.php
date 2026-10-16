@@ -353,13 +353,25 @@ class PdfCompressionService
         }
 
         $compressedSize = filesize($outputPath);
-        $ratio = round((1 - ($compressedSize / $job->original_size)) * 100, 2);
+        $inputPath = Storage::disk('public')->path($job->original_path);
+
+        // Anti-Expansion Safety Guard:
+        // Jika output >= ukuran file asli, ganti berkas di disk dengan file asli dan set rasio 0%
+        if ($compressedSize >= $job->original_size && file_exists($inputPath)) {
+            Log::info("PdfCompressionService anti-expansion guard: Output ({$compressedSize} bytes) >= input ({$job->original_size} bytes). Reverting to original file.");
+            copy($inputPath, $outputPath);
+            clearstatcache(true, $outputPath);
+            $compressedSize = $job->original_size;
+            $ratio = 0.0;
+        } else {
+            $ratio = $job->original_size > 0 ? max(0, round((1 - ($compressedSize / $job->original_size)) * 100, 2)) : 0.0;
+        }
 
         $job->update([
             'status'            => 'completed',
             'compressed_path'   => $outputRel,
             'compressed_size'   => $compressedSize,
-            'compression_ratio' => max(0, $ratio),
+            'compression_ratio' => $ratio,
             'compressed_at'     => now(),
         ]);
 
