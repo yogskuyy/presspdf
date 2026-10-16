@@ -2778,7 +2778,16 @@ async function startBatchCompress() {
 
         try {
             const res = await fetch(URL_COMPRESS_ENDPOINT, { method: 'POST', body: form });
-            const data = await res.json();
+            let data = null;
+            const resText = await res.text();
+            try {
+                data = JSON.parse(resText);
+            } catch (jsonErr) {
+                if (!res.ok) {
+                    throw new Error(`Server Error (${res.status}): Batas ukuran server terlampaui atau terjadi galat internal.`);
+                }
+                throw new Error('Respon server bukan format JSON yang valid.');
+            }
 
             if (!res.ok) {
                 throw new Error(data.message || data.errors?.file?.[0] || 'Gagal memproses file.');
