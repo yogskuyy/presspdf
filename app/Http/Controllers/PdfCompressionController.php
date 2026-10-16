@@ -641,31 +641,7 @@ class PdfCompressionController extends Controller
                 @unlink($pass2Output);
 
                 // Setting /screen terbukti mengompresi dokumen scan secara masif (60-75% hemat) tanpa merusak keterbacaan teks
-                $cmdPass2 = [
-                    $gs,
-                    '-sDEVICE=pdfwrite',
-                    '-dCompatibilityLevel=1.4',
-                    '-dPDFSETTINGS=/screen',
-                    '-dNOPAUSE', '-dQUIET', '-dBATCH',
-                    '-dCompressFonts=true',
-                    '-dSubsetFonts=true',
-                    '-dDetectDuplicateImages=true',
-                    '-dDownsampleColorImages=true',
-                    '-dDownsampleGrayImages=true',
-                    '-dDownsampleMonoImages=true',
-                    '-dColorImageResolution=80',
-                    '-dGrayImageResolution=80',
-                    '-dMonoImageResolution=120',
-                    '-dColorImageDownsampleThreshold=1.0',
-                    '-dGrayImageDownsampleThreshold=1.0',
-                    '-dMonoImageDownsampleThreshold=1.0',
-                    '-dColorImageDownsampleType=/Bicubic',
-                    '-dGrayImageDownsampleType=/Bicubic',
-                    '-dMonoImageDownsampleType=/Bicubic',
-                    '-dAutoRotatePages=/None',
-                    "-sOutputFile={$pass2Output}",
-                    $input,
-                ];
+                $cmdPass2 = $this->buildGsCommand($gs, $input, $pass2Output, 80, '/screen');
 
                 try {
                     $startTime2 = microtime(true);
@@ -701,31 +677,7 @@ class PdfCompressionController extends Controller
                 $pass3Output = $output . '.pass3.pdf';
                 @unlink($pass3Output);
 
-                $cmdPass3 = [
-                    $gs,
-                    '-sDEVICE=pdfwrite',
-                    '-dCompatibilityLevel=1.4',
-                    '-dPDFSETTINGS=/screen',
-                    '-dNOPAUSE', '-dQUIET', '-dBATCH',
-                    '-dCompressFonts=true',
-                    '-dSubsetFonts=true',
-                    '-dDetectDuplicateImages=true',
-                    '-dDownsampleColorImages=true',
-                    '-dDownsampleGrayImages=true',
-                    '-dDownsampleMonoImages=true',
-                    '-dColorImageResolution=65',
-                    '-dGrayImageResolution=65',
-                    '-dMonoImageResolution=96',
-                    '-dColorImageDownsampleThreshold=1.0',
-                    '-dGrayImageDownsampleThreshold=1.0',
-                    '-dMonoImageDownsampleThreshold=1.0',
-                    '-dColorImageDownsampleType=/Bicubic',
-                    '-dGrayImageDownsampleType=/Bicubic',
-                    '-dMonoImageDownsampleType=/Bicubic',
-                    '-dAutoRotatePages=/None',
-                    "-sOutputFile={$pass3Output}",
-                    $input,
-                ];
+                $cmdPass3 = $this->buildGsCommand($gs, $input, $pass3Output, 65, '/screen');
 
                 try {
                     $p3 = new Process($cmdPass3, null, $env);
