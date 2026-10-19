@@ -514,6 +514,113 @@
         color: var(--accent-green);
     }
 
+    /* THRESHOLD FILTER SCALE CARD */
+    .threshold-control-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 16px 20px;
+        margin-bottom: 18px;
+        box-shadow: var(--shadow-sm);
+        transition: all 0.25s ease;
+    }
+    .threshold-control-card:hover {
+        border-color: var(--border-hover);
+        box-shadow: var(--shadow-md);
+    }
+    .threshold-top-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .threshold-title-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .threshold-icon-circle {
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        background: var(--accent-red-light);
+        color: var(--accent-red);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 15px;
+        flex-shrink: 0;
+    }
+    .threshold-title-text {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .threshold-active-badge {
+        font-size: 11.5px;
+        font-weight: 800;
+        padding: 3px 10px;
+        border-radius: 99px;
+        background: var(--accent-red-light);
+        color: var(--accent-red);
+        border: 1px solid rgba(225, 29, 72, 0.25);
+    }
+    .threshold-desc-text {
+        font-size: 11.5px;
+        color: var(--text-muted);
+        margin-top: 2px;
+    }
+    .threshold-val-counter {
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border-subtle);
+        padding: 6px 14px;
+        border-radius: var(--radius-sm);
+        flex-shrink: 0;
+    }
+    .threshold-big-num {
+        font-family: var(--font-mono);
+        font-size: 20px;
+        font-weight: 800;
+        color: var(--primary);
+        line-height: 1;
+    }
+    .threshold-unit {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text-muted);
+    }
+    .threshold-slider-container {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .filter-range-slider {
+        accent-color: var(--accent-red);
+    }
+    .threshold-ticks {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--text-muted);
+        padding: 0 2px;
+    }
+    .threshold-ticks span {
+        cursor: pointer;
+        transition: color 0.15s ease;
+    }
+    .threshold-ticks span:hover {
+        color: var(--primary);
+    }
+
     /* TABS */
     .filter-tabs-row {
         display: flex;
@@ -1889,11 +1996,11 @@
         </div>
         <div class="step-pill active">
             <span class="step-num">2</span>
-            <span>Saring Otomatis (&ge; 19 MB)</span>
+            <span>Filter Ambang Batas (&ge; <span class="threshold-label-val">19</span> MB)</span>
         </div>
         <div class="step-pill active">
             <span class="step-num">3</span>
-            <span>Target Presisi (5 / 10 / 15 MB)</span>
+            <span>Target Presisi (8 / 12 / 16 MB)</span>
         </div>
         <div class="step-pill active">
             <span class="step-num">4</span>
@@ -1915,6 +2022,42 @@
             </div>
 
             <div class="card-body">
+                <!-- THRESHOLD FILTER SCALE CARD (5 MB - 34 MB) -->
+                <div class="threshold-control-card" id="thresholdControlCard">
+                    <div class="threshold-top-row">
+                        <div class="threshold-title-left">
+                            <div class="threshold-icon-circle">
+                                <i class="fa-solid fa-sliders"></i>
+                            </div>
+                            <div>
+                                <div class="threshold-title-text">
+                                    <span>Skala Ambang Batas Filter</span>
+                                    <span class="threshold-active-badge" id="thresholdBadgeVal">&ge; 19 MB</span>
+                                </div>
+                                <div class="threshold-desc-text">Hanya berkas &ge; batas ini yang dikompresi. Berkas di bawahnya tetap aman &amp; utuh.</div>
+                            </div>
+                        </div>
+                        <div class="threshold-val-counter">
+                            <span class="threshold-big-num" id="thresholdBigNum">19</span>
+                            <span class="threshold-unit">MB</span>
+                        </div>
+                    </div>
+
+                    <div class="threshold-slider-container">
+                        <input type="range" class="modern-range-input filter-range-slider" id="thresholdSlider"
+                               min="5" max="34" step="1" value="19"
+                               oninput="handleThresholdSliderChange(this.value)">
+                        <div class="threshold-ticks">
+                            <span onclick="setThresholdVal(5)">5 MB</span>
+                            <span onclick="setThresholdVal(10)">10 MB</span>
+                            <span onclick="setThresholdVal(15)">15 MB</span>
+                            <span onclick="setThresholdVal(19)" style="font-weight: 700; color: var(--primary);">19 MB (Standar BPJS)</span>
+                            <span onclick="setThresholdVal(25)">25 MB</span>
+                            <span onclick="setThresholdVal(34)">34 MB</span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- STATE 1: DROPZONE -->
                 <div class="dropzone-view" id="dropzoneView"
                      onclick="triggerFileInput()"
@@ -1928,7 +2071,7 @@
 
                     <div class="dz-title">Tarik &amp; Letakkan File atau Folder PDF di Sini</div>
                     <p class="dz-desc">
-                        Sistem memindai seluruh folder &amp; sub-folder. Berkas berukuran <strong>&ge; 19 MB</strong> otomatis dikompresi. Nama file PDF kode klaim <strong>tetap 100% utuh</strong>, dan folder terluar otomatis diberi inisial <code>compres_</code>.
+                        Sistem memindai seluruh folder &amp; sub-folder. Berkas berukuran <strong>&ge; <span class="threshold-label-val">19</span> MB</strong> otomatis dikompresi. Nama file PDF kode klaim <strong>tetap 100% utuh</strong>, dan folder terluar otomatis diberi inisial <code>compres_</code>.
                     </p>
 
                     <div class="dz-buttons-row">
@@ -1944,7 +2087,7 @@
 
                     <div class="dz-chips-ribbon">
                         <span class="dz-chip"><i class="fa-solid fa-check" style="color: var(--accent-green);"></i> Folder Penuh (Maks. 1 GB)</span>
-                        <span class="dz-chip"><i class="fa-solid fa-filter" style="color: var(--accent-red);"></i> Filter Otomatis &ge; 19 MB</span>
+                        <span class="dz-chip"><i class="fa-solid fa-filter" style="color: var(--accent-red);"></i> Filter Ambang Batas &ge; <span class="threshold-label-val">19</span> MB (Skala 5–34 MB)</span>
                         <span class="dz-chip"><i class="fa-solid fa-shield-halved" style="color: var(--accent-blue);"></i> Nama Kode Utuh 100%</span>
                     </div>
                 </div>
@@ -1968,8 +2111,8 @@
 
                         <div class="queue-stat-badges">
                             <span class="stat-badge-pill"><span id="metricTotalCount">0</span> Total Berkas</span>
-                            <span class="stat-badge-pill needs">🔴 <span id="metricNeedsCount">0</span> Perlu Kompres (&ge; 19 MB)</span>
-                            <span class="stat-badge-pill safe">🟢 <span id="metricSafeCount">0</span> Aman (&lt; 19 MB)</span>
+                            <span class="stat-badge-pill needs">🔴 <span id="metricNeedsCount">0</span> Perlu Kompres (&ge; <span class="threshold-label-val">19</span> MB)</span>
+                            <span class="stat-badge-pill safe">🟢 <span id="metricSafeCount">0</span> Aman (&lt; <span class="threshold-label-val">19</span> MB)</span>
                         </div>
                     </div>
 
@@ -2010,28 +2153,28 @@
                     <i class="fa-solid fa-sliders" style="color: var(--primary);"></i>
                     <span>Target Ukuran &amp; Eksekusi</span>
                 </div>
-                <span class="card-badge" id="targetSizeLabel" style="color: var(--primary); font-weight: 800;">10.0 MB</span>
+                <span class="card-badge" id="targetSizeLabel" style="color: var(--primary); font-weight: 800;">12.0 MB</span>
             </div>
 
             <div class="card-body">
                 <!-- PRESET OPTIONS -->
                 <div class="presets-container">
-                    <!-- 5.0 MB -->
-                    <div class="preset-card" id="presetLow" onclick="selectCompressionPreset(5.0, 'low')">
+                    <!-- 8.0 MB -->
+                    <div class="preset-card" id="presetLow" onclick="selectCompressionPreset(8.0, 'low')">
                         <div class="preset-card-left">
                             <div class="preset-radio-indicator">
                                 <div class="preset-radio-dot"></div>
                             </div>
                             <div class="preset-title-wrap">
                                 <div class="preset-name">Kompak &amp; Ringan</div>
-                                <div class="preset-desc">Hasil pasti &lt; 5 MB · Cocok untuk batas unggah ketat.</div>
+                                <div class="preset-desc">Target &lt; 8 MB · Ukuran berkas ekstra hemat, teks &amp; tabel tetap jelas.</div>
                             </div>
                         </div>
-                        <div class="preset-size-num">5.0 MB</div>
+                        <div class="preset-size-num">8.0 MB</div>
                     </div>
 
-                    <!-- 10.0 MB (RECOMMENDED) -->
-                    <div class="preset-card active" id="presetRec" onclick="selectCompressionPreset(10.0, 'recommended')">
+                    <!-- 12.0 MB (RECOMMENDED) -->
+                    <div class="preset-card active" id="presetRec" onclick="selectCompressionPreset(12.0, 'recommended')">
                         <div class="preset-card-left">
                             <div class="preset-radio-indicator">
                                 <div class="preset-radio-dot"></div>
@@ -2041,53 +2184,58 @@
                                     Standar Rekomendasi
                                     <span class="preset-badge-rec">Pilihan Utama</span>
                                 </div>
-                                <div class="preset-desc">Hasil dijamin &lt; 10 MB · Teks &amp; barcode sangat jernih.</div>
+                                <div class="preset-desc">Target &lt; 12 MB · Keseimbangan optimal, sangat jernih &amp; barcode tajam.</div>
                             </div>
                         </div>
-                        <div class="preset-size-num">10.0 MB</div>
+                        <div class="preset-size-num">12.0 MB</div>
                     </div>
 
-                    <!-- 15.0 MB -->
-                    <div class="preset-card" id="presetHigh" onclick="selectCompressionPreset(15.0, 'high')">
+                    <!-- 16.0 MB -->
+                    <div class="preset-card" id="presetHigh" onclick="selectCompressionPreset(16.0, 'high')">
                         <div class="preset-card-left">
                             <div class="preset-radio-indicator">
                                 <div class="preset-radio-dot"></div>
                             </div>
                             <div class="preset-title-wrap">
-                                <div class="preset-name">Ketajaman Maksimal</div>
-                                <div class="preset-desc">Hasil pasti &lt; 15 MB · Kualitas tinggi mendekati berkas asli.</div>
+                                <div class="preset-name">
+                                    Ketajaman Maksimal
+                                    <span class="preset-badge-rec" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border-color: rgba(16, 185, 129, 0.3);">Kualitas Arsip</span>
+                                </div>
+                                <div class="preset-desc">Target &lt; 16 MB · Kualitas tinggi mendekati dokumen scan asli.</div>
                             </div>
                         </div>
-                        <div class="preset-size-num">15.0 MB</div>
+                        <div class="preset-size-num">16.0 MB</div>
                     </div>
                 </div>
 
                 <!-- OPTIONAL SLIDER -->
                 <div class="slider-accordion-toggle" onclick="toggleCustomSlider()">
-                    <span><i class="fa-solid fa-sliders" style="margin-right: 6px;"></i> Atur Ukuran Kustom (5.0 – 15.0 MB)</span>
+                    <span><i class="fa-solid fa-sliders" style="margin-right: 6px;"></i> Atur Ukuran Kustom (5.0 – 18.0 MB)</span>
                     <i class="fa-solid fa-chevron-down" id="customSliderChevron"></i>
                 </div>
 
                 <div class="slider-drawer" id="customSliderDrawer">
                     <input type="range" class="modern-range-input" id="targetSizeSlider"
-                           min="5.0" max="15.0" step="0.5" value="10.0"
+                           min="5.0" max="18.0" step="0.5" value="12.0"
                            oninput="handleSliderChange(this.value)">
                     <div class="range-ticks-text">
                         <span>5.0 MB</span>
-                        <span>10.0 MB</span>
-                        <span>15.0 MB</span>
+                        <span>8.0 MB</span>
+                        <span>12.0 MB</span>
+                        <span>16.0 MB</span>
+                        <span>18.0 MB</span>
                     </div>
                 </div>
 
                 <div class="mode-hint-banner">
                     <i class="fa-solid fa-circle-info"></i>
-                    <span id="qualityHintText">Target 10.0 MB: Teks &amp; barcode sangat jernih, proses kilat ~5-8 detik.</span>
+                    <span id="qualityHintText">Target 12.0 MB: Standar rekomendasi, teks dokumen &amp; tabel super jelas, barcode 100% terbaca.</span>
                 </div>
 
                 <div class="master-action-row">
                     <button type="button" class="btn-compress-master" id="compressBtn" onclick="startBatchCompress()">
                         <i class="fa-solid fa-bolt"></i>
-                        <span id="compressBtnText">Kompres File Terdeteksi (&ge; 19 MB)</span>
+                        <span id="compressBtnText">Kompres File Terdeteksi (&ge; <span class="threshold-label-val">19</span> MB)</span>
                     </button>
                     <button type="button" class="btn-cancel-clean" onclick="clearSelectedFiles()">
                         Batal
@@ -2114,22 +2262,22 @@
             <div class="spec-icon-box red">
                 <i class="fa-solid fa-filter"></i>
             </div>
-            <div class="spec-title">Filter Ambang Batas 19 MB</div>
+            <div class="spec-title">Skala Ambang Batas 5–34 MB</div>
             <p class="spec-desc">
-                File PDF &ge; 19 MB otomatis terdeteksi &amp; dikompresi. Berkas &lt; 19 MB tetap disertakan utuh di foldernya tanpa perubahan.
+                Ambang batas fleksibel 5 MB hingga 34 MB. File di atas batas otomatis disaring untuk dikompresi, sedangkan berkas di bawahnya tetap aman &amp; utuh.
             </p>
-            <div class="spec-tag-sub">&ge; 19 MB OTOMATIS</div>
+            <div class="spec-tag-sub">SKALA 5 – 34 MB FLEKSIBEL</div>
         </div>
 
         <div class="spec-card">
             <div class="spec-icon-box amber">
-                <i class="fa-solid fa-folder-tree"></i>
+                <i class="fa-solid fa-layer-group"></i>
             </div>
-            <div class="spec-title">Struktur Folder Rapi</div>
+            <div class="spec-title">3 Kualitas Jernih &amp; Terbaca</div>
             <p class="spec-desc">
-                Mendukung 1 folder penuh (maks 1 GB). Output terbungkus rapi dengan awalan <code>compres_</code> pada folder terluar.
+                Preset 8 MB, 12 MB, dan 16 MB terkalibrasi khusus agar tulisan kecil, tabel medis, tanda tangan, dan barcode selalu tajam dan terbaca jelas.
             </p>
-            <div class="spec-tag-sub">MAKS. 1 GB PER FOLDER</div>
+            <div class="spec-tag-sub">8 / 12 / 16 MB TERKALIBRASI</div>
         </div>
 
         <div class="spec-card">
@@ -2216,10 +2364,10 @@
             <i class="fa-solid fa-circle-check"></i>
         </div>
         <h2 style="font-size: 17px; font-weight: 800; color: var(--text-primary);" id="modalTitle">
-            Berkas Sudah di Bawah 19 MB!
+            Berkas Sudah di Bawah Ambang Batas!
         </h2>
-        <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
-            File PDF ini sudah berukuran aman (&lt; 19 MB) sehingga tidak memerlukan kompresi dan siap digunakan.
+        <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5;" id="modalDesc">
+            File PDF ini sudah berukuran aman (&lt; <span class="threshold-label-val">19</span> MB) sehingga tidak memerlukan kompresi dan siap digunakan.
         </p>
         <div style="padding: 10px 16px; border-radius: 8px; background: var(--bg-elevated); width: 100%; font-size: 12.5px; font-family: var(--font-mono);">
             <span id="modalFileName" style="font-weight: 700;">—</span>:
@@ -2337,7 +2485,11 @@ let activeTheme = localStorage.getItem('presspdf_theme') || 'light';
 let isCompressing = false;
 let currentQueueFilter = 'all';
 let currentSourceInfo = { type: 'files', name: '' };
-const NINETEEN_MB_BYTES = 19 * 1024 * 1024;
+
+// Skala Ambang Batas Dinamis (5 MB - 34 MB, default: 19 MB)
+let currentThresholdMb = parseFloat(localStorage.getItem('presspdf_threshold_mb')) || 19;
+let currentThresholdBytes = currentThresholdMb * 1024 * 1024;
+let currentTargetMb = 12.0;
 
 const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
 const URL_COMPRESS_ENDPOINT = '{{ route("pdf.compress") }}';
@@ -2352,6 +2504,54 @@ if (activeTheme === 'dark-titanium') {
     document.documentElement.removeAttribute('data-theme');
     document.getElementById('themeSwitchText').textContent = 'Mode Gelap';
 }
+
+function handleThresholdSliderChange(val) {
+    const num = Math.min(34, Math.max(5, parseInt(val, 10) || 19));
+    setThresholdVal(num);
+}
+
+function setThresholdVal(val) {
+    const num = Math.min(34, Math.max(5, parseInt(val, 10) || 19));
+    currentThresholdMb = num;
+    currentThresholdBytes = num * 1024 * 1024;
+    localStorage.setItem('presspdf_threshold_mb', num);
+
+    const slider = document.getElementById('thresholdSlider');
+    if (slider && parseInt(slider.value, 10) !== num) {
+        slider.value = num;
+    }
+
+    const bigNum = document.getElementById('thresholdBigNum');
+    if (bigNum) bigNum.textContent = num;
+
+    const badgeVal = document.getElementById('thresholdBadgeVal');
+    if (badgeVal) badgeVal.innerHTML = `&ge; ${num} MB`;
+
+    document.querySelectorAll('.threshold-label-val').forEach(el => {
+        el.textContent = num;
+    });
+
+    recalculateQueueThreshold();
+}
+
+function recalculateQueueThreshold() {
+    if (!selectedFilesQueue || selectedFilesQueue.length === 0) return;
+
+    selectedFilesQueue.forEach(item => {
+        const isOver = item.size >= currentThresholdBytes;
+        item.isOverThreshold = isOver;
+        item.shouldCompress = isOver;
+        if (item.status === 'pending') {
+            item.statusText = isOver ? `Perlu Kompres (≥ ${currentThresholdMb} MB)` : `Aman (< ${currentThresholdMb} MB)`;
+        }
+    });
+
+    updateInsightsStrip();
+    renderFilesQueue();
+}
+
+// Initial set threshold from saved preference or default (19 MB)
+setThresholdVal(currentThresholdMb);
 
 function toggleThemeMode() {
     if (activeTheme === 'dark-titanium') {
@@ -2422,17 +2622,17 @@ function processIncomingFiles(fileList, isFolder = false) {
         const relPath = file.customRelativePath || file.webkitRelativePath || file.name;
         const exists = selectedFilesQueue.some(item => item.name === file.name && item.size === file.size && item.relativePath === relPath);
         if (!exists) {
-            const isOver19 = file.size >= NINETEEN_MB_BYTES;
+            const isOver = file.size >= currentThresholdBytes;
             selectedFilesQueue.push({
                 id: 'f_' + Math.random().toString(36).substr(2, 9),
                 file: file,
                 name: file.name,
                 relativePath: relPath,
                 size: file.size,
-                isOver19Mb: isOver19,
-                shouldCompress: isOver19,
+                isOverThreshold: isOver,
+                shouldCompress: isOver,
                 status: 'pending',
-                statusText: isOver19 ? 'Perlu Kompres (≥ 19 MB)' : 'Aman (Disertakan Utuh)',
+                statusText: isOver ? `Perlu Kompres (≥ ${currentThresholdMb} MB)` : `Aman (< ${currentThresholdMb} MB)`,
                 result: null
             });
         }
@@ -2457,23 +2657,23 @@ function processIncomingFiles(fileList, isFolder = false) {
     const currentVal = document.getElementById('targetSizeSlider').value;
     handleSliderChange(currentVal);
 
-    const totalNeeds = selectedFilesQueue.filter(f => f.isOver19Mb).length;
+    const totalNeeds = selectedFilesQueue.filter(f => f.isOverThreshold).length;
     if (totalNeeds === 0 && selectedFilesQueue.length > 0) {
         showSmallPopup(
             currentSourceInfo.name || 'Folder Dokumen',
-            `Semua ${selectedFilesQueue.length} file PDF sudah berukuran < 19 MB. Berkas Anda aman tanpa perlu kompresi!`
+            `Semua ${selectedFilesQueue.length} file PDF sudah berukuran < ${currentThresholdMb} MB. Berkas Anda aman tanpa perlu kompresi!`
         );
     }
 }
 
 function updateInsightsStrip() {
     const totalPdfs = selectedFilesQueue.length;
-    const over19Mb = selectedFilesQueue.filter(f => f.isOver19Mb).length;
-    const under19Mb = totalPdfs - over19Mb;
+    const overThreshold = selectedFilesQueue.filter(f => f.isOverThreshold).length;
+    const underThreshold = totalPdfs - overThreshold;
 
     document.getElementById('metricTotalCount').textContent = totalPdfs;
-    document.getElementById('metricNeedsCount').textContent = over19Mb;
-    document.getElementById('metricSafeCount').textContent = under19Mb;
+    document.getElementById('metricNeedsCount').textContent = overThreshold;
+    document.getElementById('metricSafeCount').textContent = underThreshold;
 
     document.getElementById('insightsFolderName').textContent = currentSourceInfo.name || `${totalPdfs} Dokumen Terdeteksi`;
     document.getElementById('insightsSourceDesc').textContent = currentSourceInfo.type === 'folder'
@@ -2481,8 +2681,8 @@ function updateInsightsStrip() {
         : 'Berkas PDF satuan siap diproses';
 
     document.getElementById('tabCountAll').textContent = totalPdfs;
-    document.getElementById('tabCountNeeds').textContent = over19Mb;
-    document.getElementById('tabCountSafe').textContent = under19Mb;
+    document.getElementById('tabCountNeeds').textContent = overThreshold;
+    document.getElementById('tabCountSafe').textContent = underThreshold;
 }
 
 function setQueueFilter(filterType) {
@@ -2499,9 +2699,9 @@ function renderFilesQueue() {
 
     let filtered = selectedFilesQueue;
     if (currentQueueFilter === 'needs_compress') {
-        filtered = selectedFilesQueue.filter(f => f.isOver19Mb);
+        filtered = selectedFilesQueue.filter(f => f.isOverThreshold);
     } else if (currentQueueFilter === 'safe') {
-        filtered = selectedFilesQueue.filter(f => !f.isOver19Mb);
+        filtered = selectedFilesQueue.filter(f => !f.isOverThreshold);
     }
 
     if (filtered.length === 0) {
@@ -2514,7 +2714,7 @@ function renderFilesQueue() {
 
     filtered.forEach(item => {
         const row = document.createElement('div');
-        row.className = `file-item-card ${item.isOver19Mb ? 'needs-comp' : 'safe-file'}`;
+        row.className = `file-item-card ${item.isOverThreshold ? 'needs-comp' : 'safe-file'}`;
         row.id = `queueItem_${item.id}`;
 
         let statusClass = 'status-pill-chip';
@@ -2528,12 +2728,12 @@ function renderFilesQueue() {
         } else if (item.status === 'error') {
             statusClass += ' error';
             statusText = 'Gagal';
-        } else if (item.isOver19Mb) {
+        } else if (item.isOverThreshold) {
             statusClass += ' needs-comp';
-            statusText = 'Perlu Kompres (≥ 19 MB)';
+            statusText = `Perlu Kompres (≥ ${currentThresholdMb} MB)`;
         } else {
             statusClass += ' safe-skip';
-            statusText = 'Aman (< 19 MB)';
+            statusText = `Aman (< ${currentThresholdMb} MB)`;
         }
 
         const pathHint = (item.relativePath && item.relativePath !== item.name)
@@ -2542,7 +2742,7 @@ function renderFilesQueue() {
 
         row.innerHTML = `
             <div class="file-main-info">
-                <div class="file-doc-icon ${item.isOver19Mb ? '' : 'safe'}">
+                <div class="file-doc-icon ${item.isOverThreshold ? '' : 'safe'}">
                     <i class="fa-solid fa-file-pdf"></i>
                 </div>
                 <div class="file-text-col">
@@ -2668,10 +2868,11 @@ function scanFileSystemEntry(entry, path = '') {
 }
 
 function selectCompressionPreset(val, modeName) {
-    document.getElementById('targetSizeSlider').value = val.toFixed(1);
+    currentTargetMb = parseFloat(val);
+    document.getElementById('targetSizeSlider').value = currentTargetMb.toFixed(1);
     updatePresetCardsUI(modeName);
-    updateTargetLabelUI(val);
-    updateQualityHintUI(modeName, val);
+    updateTargetLabelUI(currentTargetMb);
+    updateQualityHintUI(modeName, currentTargetMb);
 }
 
 function updatePresetCardsUI(modeName) {
@@ -2689,23 +2890,24 @@ function updateQualityHintUI(modeName, num) {
     const hintEl = document.getElementById('qualityHintText');
     const val = parseFloat(num);
 
-    if (modeName === 'low' || val <= 6.0) {
-        hintEl.textContent = `Target ${val.toFixed(1)} MB: Sangat hemat & ringan, anti-alias halus untuk batas ketat.`;
-    } else if (modeName === 'high' || val >= 13.0) {
-        hintEl.textContent = `Target ${val.toFixed(1)} MB: Ketajaman tinggi 124 DPI mendekati dokumen asli.`;
+    if (modeName === 'low' || val <= 8.5) {
+        hintEl.textContent = `Target ${val.toFixed(1)} MB: Kompak & ringan, sangat hemat penyimpanan, teks tabel & paraf dokter tetap terbaca.`;
+    } else if (modeName === 'high' || val >= 14.5) {
+        hintEl.textContent = `Target ${val.toFixed(1)} MB: Ketajaman maksimal 135 DPI kualitas arsip scan asli, resolusi paling jernih.`;
     } else {
-        hintEl.textContent = `Target ${val.toFixed(1)} MB: Standar rekomendasi, teks dokumen & tabel super jelas.`;
+        hintEl.textContent = `Target ${val.toFixed(1)} MB: Standar rekomendasi optimal, teks dokumen super jelas & barcode 100% terbaca.`;
     }
 }
 
 function handleSliderChange(val) {
     const num = parseFloat(val);
+    currentTargetMb = num;
     updateTargetLabelUI(num);
 
     let mode = 'custom';
-    if (Math.abs(num - 5.0) < 0.25) mode = 'low';
-    else if (Math.abs(num - 10.0) < 0.25) mode = 'recommended';
-    else if (Math.abs(num - 15.0) < 0.25) mode = 'high';
+    if (Math.abs(num - 8.0) < 0.25) mode = 'low';
+    else if (Math.abs(num - 12.0) < 0.25) mode = 'recommended';
+    else if (Math.abs(num - 16.0) < 0.25) mode = 'high';
 
     updatePresetCardsUI(mode);
     updateQualityHintUI(mode, num);
@@ -2723,11 +2925,11 @@ function toggleCustomSlider() {
 }
 
 async function startBatchCompress() {
-    const over19MbCount = selectedFilesQueue.filter(f => f.isOver19Mb).length;
-    if (over19MbCount === 0 || isCompressing) {
+    const overThresholdCount = selectedFilesQueue.filter(f => f.isOverThreshold).length;
+    if (overThresholdCount === 0 || isCompressing) {
         showSmallPopup(
             currentSourceInfo.name || 'Dokumen Pilihan',
-            'Tidak ada file berukuran mulai dari 19 MB ke atas. Semua berkas sudah aman tanpa perlu kompresi!'
+            `Tidak ada file berukuran mulai dari ${currentThresholdMb} MB ke atas. Semua berkas sudah aman tanpa perlu kompresi!`
         );
         return;
     }
@@ -2754,26 +2956,27 @@ async function startBatchCompress() {
         setProgress(overallPct);
         document.getElementById('progressPctText').textContent = `${overallPct}%`;
 
-        if (item.isOver19Mb) {
+        if (item.isOverThreshold) {
             if (statusTag) {
                 statusTag.className = 'status-pill-chip compressing';
                 statusTag.textContent = 'Mengompresi...';
             }
-            document.getElementById('progressStageText').textContent = `Mengompresi (${i + 1}/${totalToProcess}): ${item.name} (≥ 19 MB)`;
+            document.getElementById('progressStageText').textContent = `Mengompresi (${i + 1}/${totalToProcess}): ${item.name} (≥ ${currentThresholdMb} MB)`;
         } else {
             if (statusTag) {
                 statusTag.className = 'status-pill-chip safe-skip';
                 statusTag.textContent = 'Menyimpan...';
             }
-            document.getElementById('progressStageText').textContent = `Menyimpan berkas aman (${i + 1}/${totalToProcess}): ${item.name} (< 19 MB)`;
+            document.getElementById('progressStageText').textContent = `Menyimpan berkas aman (${i + 1}/${totalToProcess}): ${item.name} (< ${currentThresholdMb} MB)`;
         }
 
         const form = new FormData();
         form.append('file', item.file);
         form.append('target_size', targetSize);
+        form.append('threshold_mb', currentThresholdMb.toString());
         form.append('batch_token', batchToken);
         form.append('relative_path', item.relativePath || item.name);
-        form.append('is_safe', item.isOver19Mb ? '0' : '1');
+        form.append('is_safe', item.isOverThreshold ? '0' : '1');
         form.append('_token', CSRF_TOKEN);
 
         try {
@@ -2840,13 +3043,13 @@ async function startBatchCompress() {
 function resetCompressBtn() {
     const btn = document.getElementById('compressBtn');
     if (btn) {
-        const over19MbCount = selectedFilesQueue.filter(f => f.isOver19Mb).length;
-        if (over19MbCount > 0) {
+        const overThresholdCount = selectedFilesQueue.filter(f => f.isOverThreshold).length;
+        if (overThresholdCount > 0) {
             btn.disabled = false;
-            btn.innerHTML = `<i class="fa-solid fa-bolt"></i><span>Kompres ${over19MbCount} File (≥ 19 MB) &amp; Susun Folder</span>`;
+            btn.innerHTML = `<i class="fa-solid fa-bolt"></i><span>Kompres ${overThresholdCount} File (&ge; <span class="threshold-label-val">${currentThresholdMb}</span> MB) &amp; Susun Folder</span>`;
         } else {
             btn.disabled = true;
-            btn.innerHTML = `<i class="fa-solid fa-check"></i><span>Semua File Sudah Aman (< 19 MB)</span>`;
+            btn.innerHTML = `<i class="fa-solid fa-check"></i><span>Semua File Sudah Aman (&lt; <span class="threshold-label-val">${currentThresholdMb}</span> MB)</span>`;
         }
     }
     const progBox = document.getElementById('progressBox');
@@ -2904,7 +3107,7 @@ function showBatchResults(resultsList, batchToken) {
                 Nama File PDF Utuh 100% &bull; Folder Terluar Otomatis Diatur "compres_"
             </div>
             <div>
-                Setiap nama file kode klaim <strong>dipertahankan tetap sama tanpa diubah</strong>. Folder paling luar otomatis diberi awalan <strong>compres_</strong> dan file aman (&lt; 19 MB) tersusun rapi di sub-foldernya. Anda tidak perlu menyortir berkas secara manual!
+                Setiap nama file kode klaim <strong>dipertahankan tetap sama tanpa diubah</strong>. Folder paling luar otomatis diberi awalan <strong>compres_</strong> dan file aman (&lt; ${currentThresholdMb} MB) tersusun rapi di sub-foldernya. Anda tidak perlu menyortir berkas secara manual!
             </div>
         </div>
     `;
@@ -2985,7 +3188,7 @@ function createResultRowElement(item) {
         ? `<span class="status-pill-chip needs-comp" style="font-size:10.5px;">🔴 Terkompresi (-${ratioNum}%)</span>`
         : (isComp
             ? `<span class="status-pill-chip safe-skip" style="font-size:10.5px;">🟢 Berkas Optimum (0%)</span>`
-            : `<span class="status-pill-chip safe-skip" style="font-size:10.5px;">🟢 Berkas Aman (&lt; 19 MB)</span>`);
+            : `<span class="status-pill-chip safe-skip" style="font-size:10.5px;">🟢 Berkas Aman (&lt; ${currentThresholdMb} MB)</span>`);
 
     const sizeHtml = isActuallyReduced
         ? `<span>${formatBytes(origSize)} &rarr; <strong>${formatBytes(finalSize)}</strong></span>`

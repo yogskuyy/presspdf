@@ -62,7 +62,8 @@ class PdfCompressionController extends Controller
 
         $gitCommit = null;
         try {
-            $pGit = new Process(['git', 'log', '-1', '--oneline']);
+            $env = $this->getGsEnv();
+            $pGit = new Process(['git', 'log', '-1', '--oneline'], null, $env);
             $pGit->setTimeout(3);
             $pGit->run();
             if ($pGit->isSuccessful()) {
@@ -123,7 +124,8 @@ class PdfCompressionController extends Controller
 
         $request->validate([
             'file'          => 'required|file|mimes:pdf|max:1048576',
-            'target_size'   => 'nullable|numeric|min:1.0|max:19.0',
+            'target_size'   => 'nullable|numeric|min:1.0|max:34.0',
+            'threshold_mb'  => 'nullable|numeric|min:5.0|max:34.0',
             'batch_token'   => 'nullable|string|max:64',
             'relative_path' => 'nullable|string|max:500',
             'is_safe'       => 'nullable|string|in:0,1',
@@ -136,13 +138,21 @@ class PdfCompressionController extends Controller
         $file         = $request->file('file');
         $size         = $file->getSize();
         $filename     = $file->getClientOriginalName();
-        $targetMb     = (float) $request->input('target_size', 10.0);
-        $targetMb     = max(1.0, min(16.0, $targetMb));
+        $targetMb     = (float) $request->input('target_size', 12.0);
+        $targetMb     = max(1.0, min(34.0, $targetMb));
         $batchToken   = $request->input('batch_token');
         $relativePath = $request->input('relative_path') ?: $filename;
 
-        // Aturan Ambang Batas: Mulai dari 19 MB ke atas wajib dikompresi. Di bawah 19 MB aman.
-        $shouldCompress = ($size >= self::MIN_SIZE) && ($request->input('is_safe') !== '1');
+        // Aturan Ambang Batas: Skala dinamis 5 MB s/d 34 MB (default 19 MB)
+        $thresholdMb    = (float) $request->input('threshold_mb', 19.0);
+        $thresholdMb    = max(5.0, min(34.0, $thresholdMb));
+        $thresholdBytes = (int) ($thresholdMb * 1024 * 1024);
+
+        $isSafeParam    = $request->input('is_safe');
+        $shouldCompress = ($isSafeParam === '0' || ($isSafeParam === null && $size >= $thresholdBytes));
+        if ($isSafeParam === '1') {
+            $shouldCompress = false;
+        }
 
         // Penamaan Berkas:
         // Setiap nama berkas PDF adalah kode unik (klaim/casemix RS).
@@ -166,7 +176,7 @@ class PdfCompressionController extends Controller
                 $inputFull = Storage::disk('public')->path($inputPath);
 
                 try {
-                    $compressed = $this->runCompression($inputFull, $outputFull, $targetMb);
+                    $compressed = $this->runCompression($inputFull, $outputFull, $targetMb, $thresholdMb);
                 } catch (\Throwable $e) {
                     Log::error('runCompression threw an exception: ' . $e->getMessage());
                     $compressed = false;
@@ -269,6 +279,7 @@ class PdfCompressionController extends Controller
                 'folder_key'         => $folderKey,
                 'folder_display'     => $folderDisplay,
                 'target_mb'          => $targetMb,
+                'threshold_mb'       => $thresholdMb,
                 'original_size'      => $size,
                 'original_human'     => $this->formatBytes($size),
                 'compressed_size'    => $compressedSize,
@@ -571,13 +582,13 @@ class PdfCompressionController extends Controller
 
     // ── PRIVATE ─────────────────────────────────────────────────────────
 
-    private function runCompression(string $input, string $output, float $targetMb = 10.0): bool
+    private function runCompression(string $input, string $output, float $targetMb = 12.0, float $thresholdMb = 19.0): bool
     {
         $input  = str_replace('/', DIRECTORY_SEPARATOR, $input);
         $output = str_replace('/', DIRECTORY_SEPARATOR, $output);
 
         $targetBytes     = (int) ($targetMb * 1024 * 1024);
-        $nineteenMbBytes = self::MIN_SIZE; // 19 MB (19,922,944 bytes)
+        $thresholdBytes  = (int) ($thresholdMb * 1024 * 1024);
         $inputSize       = file_exists($input) ? filesize($input) : 0;
 
         if ($inputSize <= 0) {
@@ -585,7 +596,7 @@ class PdfCompressionController extends Controller
         }
 
         $gs = $this->findGhostscript();
-        Log::info("runCompression called with input: {$input} (" . round($inputSize / 1048576, 2) . " MB), output: {$output}, target: {$targetMb} MB, GS path: " . ($gs ?? 'NULL'));
+        Log::info("runCompression called with input: {$input} (" . round($inputSize / 1048576, 2) . " MB), output: {$output}, target: {$targetMb} MB, threshold: {$thresholdMb} MB, GS path: " . ($gs ?? 'NULL'));
 
         if ($gs) {
             $tempDir = str_replace('/', DIRECTORY_SEPARATOR, storage_path('app/temp_gs'));
@@ -601,7 +612,7 @@ class PdfCompressionController extends Controller
             $pass1Output = $output . '.pass1.pdf';
             @unlink($pass1Output);
             $dpiPass1    = $this->calculateTargetDpi($targetMb, $input);
-            $presetPass1 = $targetMb <= 5.0 ? '/screen' : '/ebook';
+            $presetPass1 = $targetMb <= 6.0 ? '/screen' : '/ebook';
             $cmdPass1    = $this->buildGsCommand($gs, $input, $pass1Output, $dpiPass1, $presetPass1);
 
             try {
@@ -631,12 +642,15 @@ class PdfCompressionController extends Controller
             }
 
             // Evaluasi ketercapaian target Pass 1
-            $reachedTarget = ($bestOutput !== null && $bestSize <= $targetBytes && $bestSize < $nineteenMbBytes && $bestSize < $inputSize);
+            $reachedTarget = ($bestOutput !== null && $bestSize <= $targetBytes && $bestSize < $thresholdBytes && $bestSize < $inputSize);
+
+            // Deteksi jika dokumen adalah scan / raster padat yang tidak mempan dikompres oleh pdfwrite (pengurangan < 5%)
+            $pass1Ineffective = ($bestSize >= (int)($inputSize * 0.95));
 
             // ── PASS 2: pdfwrite High-Efficiency Screen Downsample (/screen, 80 DPI) ──
-            // Dijalankan jika Pass 1 tidak mencapai target, ATAU masih >= 19 MB, ATAU tidak berhasil mengecilkan ukuran
-            if (!$reachedTarget) {
-                Log::info("Pass 1 size ({$bestSize} bytes) does not meet target ({$targetBytes} bytes) or >= 19MB. Triggering Pass 2 Screen Downsample...");
+            // Dijalankan jika Pass 1 tidak mencapai target DAN bukan dokumen scan murni yang tidak mempan pdfwrite
+            if (!$reachedTarget && !$pass1Ineffective) {
+                Log::info("Pass 1 size ({$bestSize} bytes) does not meet target ({$targetBytes} bytes) or >= {$thresholdMb}MB. Triggering Pass 2 Screen Downsample...");
                 $pass2Output = $output . '.pass2.pdf';
                 @unlink($pass2Output);
 
@@ -671,9 +685,9 @@ class PdfCompressionController extends Controller
                 }
             }
 
-            // ── PASS 3: Ultra-Compression untuk berkas klaim sangat tebal / padat (100+ halaman) yang masih >= 19 MB ──
-            if ($bestSize >= $nineteenMbBytes && $bestSize > 0) {
-                Log::info("Best size ({$bestSize} bytes) still exceeds 19 MB! Triggering Pass 3 Ultra-Compression (65 DPI)...");
+            // ── PASS 3: Ultra-Compression untuk berkas klaim sangat tebal / padat (100+ halaman) yang masih >= thresholdBytes ──
+            if ($bestSize >= $thresholdBytes && $bestSize > 0 && !$pass1Ineffective) {
+                Log::info("Best size ({$bestSize} bytes) still exceeds {$thresholdMb} MB! Triggering Pass 3 Ultra-Compression (65 DPI)...");
                 $pass3Output = $output . '.pass3.pdf';
                 @unlink($pass3Output);
 
@@ -704,11 +718,11 @@ class PdfCompressionController extends Controller
                 }
             }
 
-            // ── PASS 4: Smart Rasterizer (Dijalankan jika berkas vektor/scan padat masih melebihi target atau >= 19 MB) ──
-            $needsRasterPass = ($bestOutput === null || $bestSize > $targetBytes || $bestSize >= $nineteenMbBytes || $bestSize >= $inputSize);
-            if ($needsRasterPass && $this->isDeviceSupported($gs, 'pdfimage24')) {
+            // ── PASS 4: Smart Rasterizer (Dijalankan jika berkas vektor/scan padat masih melebihi target atau >= thresholdBytes, atau pdfwrite tidak efektif) ──
+            $needsRasterPass = ($bestOutput === null || $bestSize > $targetBytes || $bestSize >= $thresholdBytes || $pass1Ineffective || $bestSize >= $inputSize);
+            if ($needsRasterPass && $this->isDeviceSupported($gs, 'pdfimage24', $env)) {
                 [$rasterDpi, $jpegQ] = $this->calculateRasterParams($targetMb, $input);
-                Log::info("Best size ({$bestSize} bytes) still exceeds target ({$targetBytes} bytes) or >= 19MB. Triggering calibrated pdfimage24 rasterizer ({$rasterDpi} DPI, Q={$jpegQ})...");
+                Log::info("Best size ({$bestSize} bytes) still exceeds target ({$targetBytes} bytes) or >= {$thresholdMb}MB (Pass 1 ineffective: " . ($pass1Ineffective ? 'YES' : 'NO') . "). Triggering calibrated pdfimage24 rasterizer ({$rasterDpi} DPI, Q={$jpegQ})...");
 
                 $tempRasterOutput = $output . '.raster.pdf';
                 @unlink($tempRasterOutput);
@@ -847,7 +861,7 @@ class PdfCompressionController extends Controller
         }
     }
 
-    private function isDeviceSupported(string $gs, string $device): bool
+    private function isDeviceSupported(string $gs, string $device, ?array $env = null): bool
     {
         static $deviceCache = [];
         $key = "{$gs}_{$device}";
@@ -856,9 +870,10 @@ class PdfCompressionController extends Controller
         }
 
         try {
+            $env = $env ?? $this->getGsEnv();
             $nullOut = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
-            $p = new Process([$gs, "-sDEVICE={$device}", '-dNOPAUSE', '-dBATCH', "-sOutputFile={$nullOut}", '-c', 'quit']);
-            $p->setTimeout(3);
+            $p = new Process([$gs, "-sDEVICE={$device}", '-dNOPAUSE', '-dBATCH', "-sOutputFile={$nullOut}", '-c', 'quit'], null, $env);
+            $p->setTimeout(5);
             $p->run();
             $deviceCache[$key] = $p->isSuccessful();
         } catch (\Throwable) {
@@ -995,14 +1010,31 @@ class PdfCompressionController extends Controller
         return null;
     }
 
-    private function getGsEnv(string $tempDir): array
+    private function getGsEnv(?string $tempDir = null): array
     {
+        if (!$tempDir) {
+            $tempDir = str_replace('/', DIRECTORY_SEPARATOR, storage_path('app/temp_gs'));
+        }
+        if (!is_dir($tempDir)) {
+            @mkdir($tempDir, 0777, true);
+        }
+
         putenv("TEMP={$tempDir}");
         putenv("TMP={$tempDir}");
         putenv("TMPDIR={$tempDir}");
 
         $pathEnv = getenv('PATH') ?: '';
-        if (PHP_OS_FAMILY !== 'Windows') {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $winExtras = [
+                'C:\\Program Files\\Git\\cmd',
+                'C:\\Program Files\\gs\\gs10.04.0\\bin',
+            ];
+            foreach ($winExtras as $dir) {
+                if (is_dir($dir) && !str_contains($pathEnv, $dir)) {
+                    $pathEnv = $pathEnv ? ($pathEnv . ';' . $dir) : $dir;
+                }
+            }
+        } else {
             $linuxDefaults = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
             $pathEnv = $pathEnv ? ($pathEnv . ':' . $linuxDefaults) : $linuxDefaults;
         }
@@ -1016,6 +1048,7 @@ class PdfCompressionController extends Controller
 
         if (PHP_OS_FAMILY === 'Windows') {
             $env['SYSTEMROOT'] = getenv('SYSTEMROOT') ?: 'C:\\Windows';
+            $env['WINDIR']     = getenv('WINDIR') ?: 'C:\\Windows';
         }
 
         return $env;
@@ -1050,38 +1083,41 @@ class PdfCompressionController extends Controller
             // Anggarkan 88% dari target untuk batas aman yang presisi
             $bytesPerPage = ($targetBytes * 0.88) / $pageCount;
 
-            if ($bytesPerPage >= 150000) {
-                return [120, 75];
-            } elseif ($bytesPerPage >= 100000) {
-                return [110, 70];
-            } elseif ($bytesPerPage >= 60000) {
-                return [96, 65];
-            } elseif ($bytesPerPage >= 40000) {
-                return [85, 60];
-            } elseif ($bytesPerPage >= 28000) {
-                return [72, 50];
-            } elseif ($bytesPerPage >= 20000) {
-                return [54, 38];
+            if ($bytesPerPage >= 200000) {
+                return [135, 82]; // Sangat tajam mendekati dokumen asli (Kualitas Arsip)
+            } elseif ($bytesPerPage >= 140000) {
+                return [120, 78]; // Super jernih, teks halus & kurva sangat tajam
+            } elseif ($bytesPerPage >= 90000) {
+                return [105, 72]; // Standar rekomendasi, teks & barcode 100% jelas
+            } elseif ($bytesPerPage >= 55000) {
+                return [92, 66];  // Tajam & bersih, efisien
+            } elseif ($bytesPerPage >= 35000) {
+                return [80, 58];  // Tetap terbaca jelas untuk dokumen banyak halaman
+            } elseif ($bytesPerPage >= 22000) {
+                return [68, 48];  // Batas minimum aman untuk 80+ halaman
             } else {
-                return [48, 32];
+                return [58, 40];  // Batas aman untuk 120+ halaman
             }
         }
 
         // Fallback jika pageCount tidak diketahui
-        if ($targetMb <= 5.0) {
-            return [60, 42];
-        }
-
-        if ($targetMb <= 10.0) {
-            $t = ($targetMb - 5.0) / 5.0;
-            $dpi = (int) round(60 + ($t * 28)); // 60 -> 88
-            $q   = (int) round(42 + ($t * 20)); // 42 -> 62
+        if ($targetMb <= 8.0) {
+            $t = max(0.0, ($targetMb - 5.0) / 3.0);
+            $dpi = (int) round(72 + ($t * 18)); // 72 -> 90 DPI
+            $q   = (int) round(52 + ($t * 13)); // 52 -> 65 Q
             return [$dpi, $q];
         }
 
-        $t = min(1.0, ($targetMb - 10.0) / 5.0);
-        $dpi = (int) round(88 + ($t * 26)); // 88 -> 114
-        $q   = (int) round(62 + ($t * 10)); // 62 -> 72
+        if ($targetMb <= 12.0) {
+            $t = ($targetMb - 8.0) / 4.0;
+            $dpi = (int) round(90 + ($t * 25)); // 90 -> 115 DPI
+            $q   = (int) round(65 + ($t * 10)); // 65 -> 75 Q
+            return [$dpi, $q];
+        }
+
+        $t = min(1.0, ($targetMb - 12.0) / 6.0);
+        $dpi = (int) round(115 + ($t * 20)); // 115 -> 135 DPI
+        $q   = (int) round(75 + ($t * 7));  // 75 -> 82 Q
         return [$dpi, $q];
     }
 
