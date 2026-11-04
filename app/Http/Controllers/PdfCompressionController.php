@@ -123,29 +123,29 @@ class PdfCompressionController extends Controller
         @ini_set('memory_limit', '1024M');
 
         $request->validate([
-            'file'          => 'required|file|mimes:pdf|max:1048576',
-            'target_size'   => 'nullable|numeric|min:1.0|max:34.0',
-            'threshold_mb'  => 'nullable|numeric|min:5.0|max:34.0',
+            'file'          => 'required|file|mimes:pdf|max:2097152',
+            'target_size'   => 'nullable|numeric|min:1.0|max:100.0',
+            'threshold_mb'  => 'nullable|numeric|min:1.0|max:500.0',
             'batch_token'   => 'nullable|string|max:64',
             'relative_path' => 'nullable|string|max:500',
             'is_safe'       => 'nullable|string|in:0,1',
         ], [
             'file.required' => 'Pilih file PDF terlebih dahulu.',
             'file.mimes'    => 'File harus berformat PDF.',
-            'file.max'      => 'Ukuran file maksimal 1 GB.',
+            'file.max'      => 'Ukuran file per-berkas melebihi batas 2 GB.',
         ]);
 
         $file         = $request->file('file');
         $size         = $file->getSize();
         $filename     = $file->getClientOriginalName();
         $targetMb     = (float) $request->input('target_size', 12.0);
-        $targetMb     = max(1.0, min(34.0, $targetMb));
+        $targetMb     = max(1.0, min(100.0, $targetMb));
         $batchToken   = $request->input('batch_token');
         $relativePath = $request->input('relative_path') ?: $filename;
 
-        // Aturan Ambang Batas: Skala dinamis 5 MB s/d 34 MB (default 19 MB)
-        $thresholdMb    = (float) $request->input('threshold_mb', 19.0);
-        $thresholdMb    = max(5.0, min(34.0, $thresholdMb));
+        // Aturan Ambang Batas: Skala fleksibel (default 34 MB atau sesuai filter yang dipilih)
+        $thresholdMb    = (float) $request->input('threshold_mb', 34.0);
+        $thresholdMb    = max(1.0, min(500.0, $thresholdMb));
         $thresholdBytes = (int) ($thresholdMb * 1024 * 1024);
 
         $isSafeParam    = $request->input('is_safe');
@@ -582,21 +582,22 @@ class PdfCompressionController extends Controller
 
     // ── PRIVATE ─────────────────────────────────────────────────────────
 
-    private function runCompression(string $input, string $output, float $targetMb = 12.0, float $thresholdMb = 19.0): bool
+    private function runCompression(string $input, string $output, float $targetMb = 12.0, float $thresholdMb = 34.0): bool
     {
         $input  = str_replace('/', DIRECTORY_SEPARATOR, $input);
         $output = str_replace('/', DIRECTORY_SEPARATOR, $output);
 
-        $targetBytes     = (int) ($targetMb * 1024 * 1024);
-        $thresholdBytes  = (int) ($thresholdMb * 1024 * 1024);
-        $inputSize       = file_exists($input) ? filesize($input) : 0;
+        $targetBytes    = (int) ($targetMb * 1024 * 1024);
+        $minTargetBytes = (int) ($targetBytes * 0.75); // Ambang minimal presisi (misal: target 16 MB -> min 12 MB)
+        $thresholdBytes = (int) ($thresholdMb * 1024 * 1024);
+        $inputSize      = file_exists($input) ? filesize($input) : 0;
 
         if ($inputSize <= 0) {
             return false;
         }
 
         $gs = $this->findGhostscript();
-        Log::info("runCompression called with input: {$input} (" . round($inputSize / 1048576, 2) . " MB), output: {$output}, target: {$targetMb} MB, threshold: {$thresholdMb} MB, GS path: " . ($gs ?? 'NULL'));
+        Log::info("runCompression called: input={$input} (" . round($inputSize / 1048576, 2) . " MB), target={$targetMb} MB (Sweet spot: " . round($minTargetBytes/1048576, 2) . " - " . round($targetBytes/1048576, 2) . " MB), GS=" . ($gs ?? 'NULL'));
 
         if ($gs) {
             $tempDir = str_replace('/', DIRECTORY_SEPARATOR, storage_path('app/temp_gs'));
@@ -605,124 +606,89 @@ class PdfCompressionController extends Controller
             }
             $env = $this->getGsEnv($tempDir);
 
-            $bestOutput = null;
-            $bestSize   = $inputSize; // Inisialisasi: hanya terima hasil yang benar-benar lebih kecil dari input
-
-            // ── PASS 1: pdfwrite Standard Balanced (/ebook atau /screen sesuai target, downsampling resolusi target) ──
-            $pass1Output = $output . '.pass1.pdf';
-            @unlink($pass1Output);
-            $dpiPass1    = $this->calculateTargetDpi($targetMb, $input);
-            $presetPass1 = $targetMb <= 6.0 ? '/screen' : '/ebook';
-            $cmdPass1    = $this->buildGsCommand($gs, $input, $pass1Output, $dpiPass1, $presetPass1);
-
-            try {
-                $startTime1 = microtime(true);
-                $p1 = new Process($cmdPass1, null, $env);
-                $p1->setTimeout(300);
-                $p1->run();
-                $elapsed1 = round(microtime(true) - $startTime1, 2);
-                clearstatcache(true, $pass1Output);
-
-                if ($p1->isSuccessful() && file_exists($pass1Output) && filesize($pass1Output) > 0) {
-                    $s1 = filesize($pass1Output);
-                    Log::info("GS Pass 1 ({$presetPass1}, {$dpiPass1} DPI) finished in {$elapsed1}s. Size: {$s1} bytes (Input: {$inputSize} bytes)");
-                    if ($s1 < $bestSize) {
-                        $bestSize   = $s1;
-                        $bestOutput = $pass1Output;
-                    } else {
-                        @unlink($pass1Output);
-                    }
-                } else {
-                    Log::warning("GS Pass 1 failed or produced empty output.");
-                    @unlink($pass1Output);
-                }
-            } catch (\Throwable $e) {
-                Log::warning("GS Pass 1 error: " . $e->getMessage());
-                @unlink($pass1Output);
+            // Tentukan estimasi DPI awal agar ukuran mendarat di sweet spot target secara presisi
+            if ($targetMb >= 15.0) {
+                $initialDpi = 205;
+            } elseif ($targetMb >= 11.0) {
+                $initialDpi = 165;
+            } elseif ($targetMb >= 7.0) {
+                $initialDpi = 135;
+            } else {
+                $initialDpi = 95;
             }
 
-            // Evaluasi ketercapaian target Pass 1
-            $reachedTarget = ($bestOutput !== null && $bestSize <= $targetBytes && $bestSize < $thresholdBytes && $bestSize < $inputSize);
+            $candidates = [];
 
-            // Deteksi jika dokumen adalah scan / raster padat yang tidak mempan dikompres oleh pdfwrite (pengurangan < 5%)
-            $pass1Ineffective = ($bestSize >= (int)($inputSize * 0.95));
-
-            // ── PASS 2: pdfwrite High-Efficiency Screen Downsample (/screen, 80 DPI) ──
-            // Dijalankan jika Pass 1 tidak mencapai target DAN bukan dokumen scan murni yang tidak mempan pdfwrite
-            if (!$reachedTarget && !$pass1Ineffective) {
-                Log::info("Pass 1 size ({$bestSize} bytes) does not meet target ({$targetBytes} bytes) or >= {$thresholdMb}MB. Triggering Pass 2 Screen Downsample...");
-                $pass2Output = $output . '.pass2.pdf';
-                @unlink($pass2Output);
-
-                // Setting /screen terbukti mengompresi dokumen scan secara masif (60-75% hemat) tanpa merusak keterbacaan teks
-                $cmdPass2 = $this->buildGsCommand($gs, $input, $pass2Output, 80, '/screen');
+            // Helper untuk mengeksekusi Ghostscript pdfwrite
+            $runGsPass = function(int $dpi, string $preset, string $suffix) use ($gs, $input, $output, $env, &$candidates, $inputSize): int {
+                $passOutput = $output . ".{$suffix}.pdf";
+                @unlink($passOutput);
+                $cmd = $this->buildGsCommand($gs, $input, $passOutput, $dpi, $preset);
 
                 try {
-                    $startTime2 = microtime(true);
-                    $p2 = new Process($cmdPass2, null, $env);
-                    $p2->setTimeout(300);
-                    $p2->run();
-                    $elapsed2 = round(microtime(true) - $startTime2, 2);
-                    clearstatcache(true, $pass2Output);
+                    $startTime = microtime(true);
+                    $p = new Process($cmd, null, $env);
+                    $p->setTimeout(300);
+                    $p->run();
+                    $elapsed = round(microtime(true) - $startTime, 2);
+                    clearstatcache(true, $passOutput);
 
-                    if ($p2->isSuccessful() && file_exists($pass2Output) && filesize($pass2Output) > 0) {
-                        $s2 = filesize($pass2Output);
-                        Log::info("GS Pass 2 (/screen, 80 DPI) finished in {$elapsed2}s. Size: {$s2} bytes (Best so far: {$bestSize} bytes)");
-                        if ($s2 < $bestSize) {
-                            if ($bestOutput && $bestOutput !== $pass2Output) @unlink($bestOutput);
-                            $bestSize   = $s2;
-                            $bestOutput = $pass2Output;
-                        } else {
-                            @unlink($pass2Output);
-                        }
+                    if ($p->isSuccessful() && file_exists($passOutput) && filesize($passOutput) > 0) {
+                        $sz = filesize($passOutput);
+                        Log::info("GS Pass {$suffix} (DPI {$dpi}, {$preset}) finished in {$elapsed}s. Size: {$sz} bytes (" . round($sz / 1048576, 2) . " MB)");
+                        $candidates[] = [
+                            'path' => $passOutput,
+                            'size' => $sz,
+                            'dpi'  => $dpi,
+                        ];
+                        return $sz;
                     } else {
-                        Log::warning("GS Pass 2 failed or produced empty output.");
-                        @unlink($pass2Output);
+                        @unlink($passOutput);
                     }
                 } catch (\Throwable $e) {
-                    Log::warning("GS Pass 2 error: " . $e->getMessage());
-                    @unlink($pass2Output);
+                    Log::warning("GS Pass {$suffix} error: " . $e->getMessage());
+                    @unlink($passOutput);
+                }
+                return 0;
+            };
+
+            // ── PASS 1: Resolusi terkalibrasi presisi awal ──
+            $s1 = $runGsPass($initialDpi, '/ebook', 'p1');
+
+            // Evaluasi ketercapaian target
+            $inSweetSpot = ($s1 >= $minTargetBytes && $s1 <= $targetBytes);
+
+            if ($inSweetSpot) {
+                Log::info("Pass 1 landed perfectly in sweet spot: " . round($s1 / 1048576, 2) . " MB (Target: {$targetMb} MB)");
+            } elseif ($s1 > $targetBytes) {
+                // Ukuran melampaui target maksimum -> turunkan DPI secara proporsional kuadratik
+                $scale = sqrt(($targetBytes * 0.90) / max(1, $s1));
+                $newDpi = max(60, min($initialDpi - 10, (int) round($initialDpi * $scale)));
+                Log::info("Pass 1 size (" . round($s1 / 1048576, 2) . " MB) > Target ({$targetMb} MB). Stepping down DPI to {$newDpi}...");
+                $runGsPass($newDpi, '/ebook', 'p2_down');
+            } elseif ($s1 > 0 && $s1 < $minTargetBytes && $initialDpi < 280) {
+                // Ukuran di bawah batas minimal (terlalu kecil / over-kompres) -> naikkan DPI agar mendekati target dan kualitas maksimal
+                $scale = sqrt(($targetBytes * 0.92) / max(1, $s1));
+                $newDpi = min(300, max($initialDpi + 15, (int) round($initialDpi * $scale)));
+                if ($newDpi > $initialDpi) {
+                    Log::info("Pass 1 size (" . round($s1 / 1048576, 2) . " MB) < Min (" . round($minTargetBytes / 1048576, 2) . " MB). Stepping up DPI to {$newDpi} for maximum clarity...");
+                    $runGsPass($newDpi, '/ebook', 'p2_up');
                 }
             }
 
-            // ── PASS 3: Ultra-Compression untuk berkas klaim sangat tebal / padat (100+ halaman) yang masih >= thresholdBytes ──
-            if ($bestSize >= $thresholdBytes && $bestSize > 0 && !$pass1Ineffective) {
-                Log::info("Best size ({$bestSize} bytes) still exceeds {$thresholdMb} MB! Triggering Pass 3 Ultra-Compression (65 DPI)...");
-                $pass3Output = $output . '.pass3.pdf';
-                @unlink($pass3Output);
-
-                $cmdPass3 = $this->buildGsCommand($gs, $input, $pass3Output, 65, '/screen');
-
-                try {
-                    $p3 = new Process($cmdPass3, null, $env);
-                    $p3->setTimeout(300);
-                    $p3->run();
-                    clearstatcache(true, $pass3Output);
-
-                    if ($p3->isSuccessful() && file_exists($pass3Output) && filesize($pass3Output) > 0) {
-                        $s3 = filesize($pass3Output);
-                        Log::info("GS Pass 3 finished. Size: {$s3} bytes (Best so far: {$bestSize} bytes)");
-                        if ($s3 < $bestSize) {
-                            if ($bestOutput && $bestOutput !== $pass3Output) @unlink($bestOutput);
-                            $bestSize   = $s3;
-                            $bestOutput = $pass3Output;
-                        } else {
-                            @unlink($pass3Output);
-                        }
-                    } else {
-                        @unlink($pass3Output);
-                    }
-                } catch (\Throwable $e) {
-                    Log::warning("GS Pass 3 error: " . $e->getMessage());
-                    @unlink($pass3Output);
+            // Cek apakah ada kandidat yang valid (<= targetBytes & < inputSize)
+            $hasValid = false;
+            foreach ($candidates as $c) {
+                if ($c['size'] <= $targetBytes && $c['size'] < $inputSize) {
+                    $hasValid = true;
+                    break;
                 }
             }
 
-            // ── PASS 4: Smart Rasterizer (Dijalankan jika berkas vektor/scan padat masih melebihi target atau >= thresholdBytes, atau pdfwrite tidak efektif) ──
-            $needsRasterPass = ($bestOutput === null || $bestSize > $targetBytes || $bestSize >= $thresholdBytes || $pass1Ineffective || $bestSize >= $inputSize);
-            if ($needsRasterPass && $this->isDeviceSupported($gs, 'pdfimage24', $env)) {
+            // PASS 3: Fallback Smart Rasterizer jika dokumen adalah scan murni / vektor yang tidak mempan pdfwrite
+            if (!$hasValid && $this->isDeviceSupported($gs, 'pdfimage24', $env)) {
                 [$rasterDpi, $jpegQ] = $this->calculateRasterParams($targetMb, $input);
-                Log::info("Best size ({$bestSize} bytes) still exceeds target ({$targetBytes} bytes) or >= {$thresholdMb}MB (Pass 1 ineffective: " . ($pass1Ineffective ? 'YES' : 'NO') . "). Triggering calibrated pdfimage24 rasterizer ({$rasterDpi} DPI, Q={$jpegQ})...");
+                Log::info("No valid pdfwrite candidate <= target. Running calibrated pdfimage24 rasterizer ({$rasterDpi} DPI, Q={$jpegQ})...");
 
                 $tempRasterOutput = $output . '.raster.pdf';
                 @unlink($tempRasterOutput);
@@ -740,88 +706,87 @@ class PdfCompressionController extends Controller
                 ];
 
                 try {
-                    $startTimeR = microtime(true);
                     $pRaster = new Process($cmdRaster, null, $env);
                     $pRaster->setTimeout(300);
                     $pRaster->run();
-                    $elapsedR = round(microtime(true) - $startTimeR, 2);
                     clearstatcache(true, $tempRasterOutput);
 
                     if ($pRaster->isSuccessful() && file_exists($tempRasterOutput) && filesize($tempRasterOutput) > 0) {
                         $rSize = filesize($tempRasterOutput);
-                        Log::info("pdfimage24 raster pass ({$rasterDpi} DPI, Q={$jpegQ}) finished in {$elapsedR}s. Size: {$rSize} bytes (Previous best: {$bestSize} bytes, Target: {$targetBytes} bytes)");
-
-                        // HANYA terima jika ukurannya benar-benar lebih kecil dari input dan lebih baik dari pass sebelumnya
-                        if ($rSize < $bestSize && $rSize < $inputSize) {
-                            if ($bestOutput && $bestOutput !== $tempRasterOutput) @unlink($bestOutput);
-                            $bestSize   = $rSize;
-                            $bestOutput = $tempRasterOutput;
-                        } else {
-                            @unlink($tempRasterOutput);
-                        }
-
-                        // Jaminan Presisi: Jika hasil kompresi masih melampaui target pilihan pengguna, lakukan fine-tuning retry
-                        if ($bestSize > $targetBytes && $bestOutput !== null) {
-                            $retryDpi = max(45, (int) round($rasterDpi * 0.82));
-                            $retryQ   = max(30, (int) round($jpegQ * 0.80));
-                            Log::info("Best size ({$bestSize} bytes) still > target ({$targetBytes} bytes). Running fine-tuning raster pass ({$retryDpi} DPI, Q={$retryQ})...");
-
-                            $tempRaster2 = $output . '.raster2.pdf';
-                            @unlink($tempRaster2);
-                            $cmdRetry = [
-                                $gs,
-                                '-sDEVICE=pdfimage24',
-                                "-r{$retryDpi}",
-                                "-dJPEGQ={$retryQ}",
-                                '-dTextAlphaBits=2',
-                                '-dGraphicsAlphaBits=2',
-                                '-dNOPAUSE', '-dQUIET', '-dBATCH',
-                                "-sOutputFile={$tempRaster2}",
-                                $input,
-                            ];
-                            $pRetry = new Process($cmdRetry, null, $env);
-                            $pRetry->setTimeout(300);
-                            $pRetry->run();
-                            clearstatcache(true, $tempRaster2);
-
-                            if ($pRetry->isSuccessful() && file_exists($tempRaster2) && filesize($tempRaster2) > 0) {
-                                $rSize2 = filesize($tempRaster2);
-                                Log::info("Fine-tuning raster pass finished. Size: {$rSize2} bytes");
-                                if ($rSize2 < $bestSize && $rSize2 < $inputSize) {
-                                    if ($bestOutput && $bestOutput !== $tempRaster2) @unlink($bestOutput);
-                                    $bestSize   = $rSize2;
-                                    $bestOutput = $tempRaster2;
-                                } else {
-                                    @unlink($tempRaster2);
-                                }
-                            } else {
-                                @unlink($tempRaster2);
-                            }
-                        }
-                    } else {
-                        Log::warning("pdfimage24 raster pass failed or produced empty output.");
-                        @unlink($tempRasterOutput);
+                        $candidates[] = [
+                            'path' => $tempRasterOutput,
+                            'size' => $rSize,
+                            'dpi'  => $rasterDpi,
+                        ];
                     }
                 } catch (\Throwable $e) {
-                    Log::warning("pdfimage24 raster pass error: " . $e->getMessage());
-                    @unlink($tempRasterOutput);
+                    Log::warning("pdfimage24 error: " . $e->getMessage());
                 }
             }
 
-            // ── FINALISASI & ANTI-EXPANSION GUARANTEE ─────────────────────────
-            @unlink($output);
-            if ($bestOutput !== null && file_exists($bestOutput) && $bestSize < $inputSize) {
-                rename($bestOutput, $output);
+            // ── SELEKSI PEMENANG OPTIMAL (Target-Calibrated Selection) ──
+            // Kriteria:
+            // 1. Ukuran HARUS <= targetBytes (tidak boleh melebihi target pengguna)
+            // 2. Ukuran HARUS < inputSize (harus terkompresi)
+            // 3. Di antara yang valid, prioritaskan yang berada di rentang [minTargetBytes, targetBytes]
+            // 4. Jika ada beberapa di rentang, pilih yang paling mendekati target (paling besar ukurannya = DPI paling tinggi & kualitas terbaik!)
+            // 5. Jika tidak ada yang >= minTargetBytes, pilih kandidat valid terbesar (kualitas paling tinggi di bawah batas)
+            $validCandidates = array_filter($candidates, function($c) use ($targetBytes, $inputSize) {
+                return $c['size'] <= $targetBytes && $c['size'] < $inputSize && file_exists($c['path']);
+            });
+
+            if (!empty($validCandidates)) {
+                usort($validCandidates, function($a, $b) use ($minTargetBytes) {
+                    $aInSweet = ($a['size'] >= $minTargetBytes);
+                    $bInSweet = ($b['size'] >= $minTargetBytes);
+
+                    if ($aInSweet && !$bInSweet) return -1;
+                    if (!$aInSweet && $bInSweet) return 1;
+
+                    // Di antara sesama sweet spot (atau sesama di bawah min), pilih yang paling besar (kualitas terbaik!)
+                    return $b['size'] <=> $a['size'];
+                });
+
+                $winner = $validCandidates[0];
+                Log::info("🎯 Selected best compression: " . round($winner['size'] / 1048576, 2) . " MB at DPI " . $winner['dpi'] . " (Target: {$targetMb} MB, Min: " . round($minTargetBytes / 1048576, 2) . " MB)");
+
+                @unlink($output);
+                rename($winner['path'], $output);
                 clearstatcache(true, $output);
-                Log::info("✅ Compression successful: {$inputSize} -> " . filesize($output) . " bytes (" . round((1 - filesize($output) / $inputSize) * 100, 1) . "% saved)");
+
+                // Bersihkan temporary files kandidat lainnya
+                foreach ($candidates as $c) {
+                    if ($c['path'] !== $output && file_exists($c['path'])) {
+                        @unlink($c['path']);
+                    }
+                }
+
                 return true;
             }
 
-            // Jika semua pass gagal menghasilkan ukuran lebih kecil (misal file scan yang sudah sangat padat),
-            // pertahankan file asli 100% sehingga TIDAK PERNAH membesar!
-            Log::info("No compression pass was smaller than input. Reverting to original file safely.");
+            // Jika semua pass melebihi target, ambil yang paling kecil atau pertahankan file asli jika tidak ada yang lebih kecil
+            $smallerThanInput = array_filter($candidates, function($c) use ($inputSize) {
+                return $c['size'] < $inputSize && file_exists($c['path']);
+            });
+            if (!empty($smallerThanInput)) {
+                usort($smallerThanInput, fn($a, $b) => $a['size'] <=> $b['size']);
+                $bestFallback = $smallerThanInput[0];
+                @unlink($output);
+                rename($bestFallback['path'], $output);
+                clearstatcache(true, $output);
+                foreach ($candidates as $c) {
+                    if ($c['path'] !== $output && file_exists($c['path'])) @unlink($c['path']);
+                }
+                return true;
+            }
+
+            // Anti-Expansion fallback: jika file asli sudah optimal, copy as-is
+            @unlink($output);
             copy($input, $output);
             clearstatcache(true, $output);
+            foreach ($candidates as $c) {
+                if (file_exists($c['path'])) @unlink($c['path']);
+            }
             return true;
         }
 
