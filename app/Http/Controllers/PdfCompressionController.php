@@ -588,7 +588,7 @@ class PdfCompressionController extends Controller
         $output = str_replace('/', DIRECTORY_SEPARATOR, $output);
 
         $targetBytes    = (int) ($targetMb * 1024 * 1024);
-        $minTargetBytes = (int) ($targetBytes * 0.75); // Ambang minimal presisi (misal: target 16 MB -> min 12 MB)
+        $minTargetBytes = (int) ($targetBytes * 0.75); // Ambang batas bawah panduan (misal: target 16 MB -> min 12 MB)
         $thresholdBytes = (int) ($thresholdMb * 1024 * 1024);
         $inputSize      = file_exists($input) ? filesize($input) : 0;
 
@@ -597,7 +597,7 @@ class PdfCompressionController extends Controller
         }
 
         $gs = $this->findGhostscript();
-        Log::info("runCompression called: input={$input} (" . round($inputSize / 1048576, 2) . " MB), target={$targetMb} MB (Sweet spot: " . round($minTargetBytes/1048576, 2) . " - " . round($targetBytes/1048576, 2) . " MB), GS=" . ($gs ?? 'NULL'));
+        Log::info("runCompression called: input={$input} (" . round($inputSize / 1048576, 2) . " MB), target={$targetMb} MB, GS=" . ($gs ?? 'NULL'));
 
         if ($gs) {
             $tempDir = str_replace('/', DIRECTORY_SEPARATOR, storage_path('app/temp_gs'));
@@ -606,16 +606,21 @@ class PdfCompressionController extends Controller
             }
             $env = $this->getGsEnv($tempDir);
 
-            // Tentukan estimasi DPI awal agar ukuran mendarat di sweet spot target secara presisi
-            if ($targetMb >= 15.0) {
-                $initialDpi = 205;
-            } elseif ($targetMb >= 11.0) {
-                $initialDpi = 165;
-            } elseif ($targetMb >= 7.0) {
-                $initialDpi = 135;
-            } else {
-                $initialDpi = 95;
-            }
+            // 1. Deteksi jumlah halaman secara akurat
+            $pageCount = max(1, $this->getPdfPageCount($input));
+
+            // 2. Adaptive Page-Aware Budgeting:
+            // Alokasikan 97% dari targetBytes sebagai budget aman agar ukuran kompresi sedekat mungkin ke target
+            // tanpa pernah melampaui batas portal klaim / batasan upload.
+            $safeTargetBytes = (int) ($targetBytes * 0.97);
+            $bytesPerPage    = $safeTargetBytes / $pageCount;
+
+            // Estimasi DPI awal berbasis budget per halaman
+            // Standar scan A4 DCTEncode: ~200 DPI menghasilkan ~410 KB/halaman pada preset /ebook
+            $estDpi     = (int) round(200 * sqrt($bytesPerPage / 410000));
+            $initialDpi = max(70, min(300, $estDpi));
+
+            Log::info("Engine Adaptive Budget: Pages={$pageCount}, Budget/page=" . round($bytesPerPage / 1024, 1) . " KB, Initial DPI={$initialDpi}");
 
             $candidates = [];
 
@@ -637,9 +642,10 @@ class PdfCompressionController extends Controller
                         $sz = filesize($passOutput);
                         Log::info("GS Pass {$suffix} (DPI {$dpi}, {$preset}) finished in {$elapsed}s. Size: {$sz} bytes (" . round($sz / 1048576, 2) . " MB)");
                         $candidates[] = [
-                            'path' => $passOutput,
-                            'size' => $sz,
-                            'dpi'  => $dpi,
+                            'path'   => $passOutput,
+                            'size'   => $sz,
+                            'dpi'    => $dpi,
+                            'preset' => $preset,
                         ];
                         return $sz;
                     } else {
@@ -652,27 +658,74 @@ class PdfCompressionController extends Controller
                 return 0;
             };
 
-            // ── PASS 1: Resolusi terkalibrasi presisi awal ──
+            // ── PASS 1: Estimasi presisi berbasis halaman ──
             $s1 = $runGsPass($initialDpi, '/ebook', 'p1');
+            $pct1 = $s1 > 0 ? ($s1 / $targetBytes) : 0;
 
-            // Evaluasi ketercapaian target
-            $inSweetSpot = ($s1 >= $minTargetBytes && $s1 <= $targetBytes);
-
-            if ($inSweetSpot) {
-                Log::info("Pass 1 landed perfectly in sweet spot: " . round($s1 / 1048576, 2) . " MB (Target: {$targetMb} MB)");
+            // Evaluasi ketercapaian target:
+            // Jika Pass 1 sudah mendarat di zona presisi emas (92% s.d. 100%), langsung anggap Bullseye!
+            if ($pct1 >= 0.92 && $pct1 <= 1.00) {
+                Log::info("Pass 1 Bullseye! Landed inside golden precision window: " . round($s1 / 1048576, 2) . " MB (" . round($pct1 * 100, 1) . "% of Target {$targetMb} MB)");
             } elseif ($s1 > $targetBytes) {
                 // Ukuran melampaui target maksimum -> turunkan DPI secara proporsional kuadratik
-                $scale = sqrt(($targetBytes * 0.90) / max(1, $s1));
-                $newDpi = max(60, min($initialDpi - 10, (int) round($initialDpi * $scale)));
-                Log::info("Pass 1 size (" . round($s1 / 1048576, 2) . " MB) > Target ({$targetMb} MB). Stepping down DPI to {$newDpi}...");
-                $runGsPass($newDpi, '/ebook', 'p2_down');
-            } elseif ($s1 > 0 && $s1 < $minTargetBytes && $initialDpi < 280) {
-                // Ukuran di bawah batas minimal (terlalu kecil / over-kompres) -> naikkan DPI agar mendekati target dan kualitas maksimal
-                $scale = sqrt(($targetBytes * 0.92) / max(1, $s1));
-                $newDpi = min(300, max($initialDpi + 15, (int) round($initialDpi * $scale)));
-                if ($newDpi > $initialDpi) {
-                    Log::info("Pass 1 size (" . round($s1 / 1048576, 2) . " MB) < Min (" . round($minTargetBytes / 1048576, 2) . " MB). Stepping up DPI to {$newDpi} for maximum clarity...");
-                    $runGsPass($newDpi, '/ebook', 'p2_up');
+                $scale = sqrt(($targetBytes * 0.95) / max(1, $s1));
+                $dpi2  = max(55, min($initialDpi - 5, (int) floor($initialDpi * $scale)));
+                Log::info("Pass 1 (" . round($s1 / 1048576, 2) . " MB) > Target ({$targetMb} MB). Stepping down DPI: {$initialDpi} -> {$dpi2}...");
+                $s2 = $runGsPass($dpi2, '/ebook', 'p2_down');
+                $pct2 = $s2 > 0 ? ($s2 / $targetBytes) : 0;
+
+                // Jika Pass 2 masih sedikit di atas target, lakukan Pass 3 yang lebih aman
+                if ($s2 > $targetBytes) {
+                    $scale3 = sqrt(($targetBytes * 0.92) / max(1, $s2));
+                    $dpi3   = max(45, min($dpi2 - 5, (int) floor($dpi2 * $scale3)));
+                    Log::info("Pass 2 still over target. Safety Pass 3: {$dpi2} -> {$dpi3}...");
+                    $runGsPass($dpi3, '/ebook', 'p3_safe');
+                } elseif ($pct2 < 0.88 && $initialDpi > $dpi2 + 4) {
+                    // Pass 2 terlalu turun di bawah target (<88%), padahal Pass 1 di atas target
+                    // Interpolasi titik optimal antara DPI2 dan DPI1
+                    $scale3 = sqrt(($targetBytes * 0.94) / max(1, $s2));
+                    $dpi3   = max($dpi2 + 2, min($initialDpi - 2, (int) floor($dpi2 * $scale3)));
+                    if ($dpi3 > $dpi2 + 2) {
+                        Log::info("Pass 2 stepped down too much (" . round($pct2 * 100, 1) . "%). Interpolating Pass 3: DPI {$dpi3}...");
+                        $runGsPass($dpi3, '/ebook', 'p3_interp');
+                    }
+                }
+            } elseif ($s1 > 0 && $pct1 < 0.92) {
+                // Ukuran di bawah 92% target -> naikkan DPI untuk meningkatkan kualitas visual & mendekati batas target
+                $scale = sqrt(($targetBytes * 0.97) / max(1, $s1));
+                $dpi2  = min(320, max($initialDpi + 5, (int) round($initialDpi * $scale)));
+
+                // Jika dokumen memiliki sedikit halaman sehingga di DPI tinggi ukurannya masih sangat kecil (<60%),
+                // aktifkan preset /printer dengan tabel kuantisasi JPEG yang lebih tinggi
+                $preset2 = '/ebook';
+                if ($pct1 < 0.60 && $dpi2 >= 260) {
+                    $preset2 = '/printer';
+                    $dpi2    = min(220, max(120, (int) round($dpi2 * 0.75)));
+                    Log::info("File is small at high DPI. Switching to /printer high-clarity preset (DPI {$dpi2})...");
+                } else {
+                    Log::info("Pass 1 size (" . round($s1 / 1048576, 2) . " MB) < 92% target. Stepping up DPI: {$initialDpi} -> {$dpi2}...");
+                }
+
+                $s2 = $runGsPass($dpi2, $preset2, 'p2_up');
+                $pct2 = $s2 > 0 ? ($s2 / $targetBytes) : 0;
+
+                // Evaluasi Pass 3 jika Pass 2 overshot atau masih bisa dimaksimalkan
+                if ($s2 > $targetBytes) {
+                    // Pass 2 overshot -> interpolasi titik tengah aman
+                    $scale3 = sqrt(($targetBytes * 0.94) / max(1, $s2));
+                    $dpi3   = max($initialDpi + 2, min($dpi2 - 3, (int) floor($dpi2 * $scale3)));
+                    if ($dpi3 < $dpi2 && $dpi3 > $initialDpi) {
+                        Log::info("Pass 2 overshot. Interpolating Pass 3: DPI {$dpi3}...");
+                        $runGsPass($dpi3, $preset2, 'p3_interp');
+                    }
+                } elseif ($pct2 < 0.88 && $dpi2 < 300) {
+                    // Masih ada ruang headroom untuk mendekatkan lagi ke target
+                    $scale3 = sqrt(($targetBytes * 0.98) / max(1, $s2));
+                    $dpi3   = min(320, (int) ceil($dpi2 * $scale3));
+                    if ($dpi3 > $dpi2 + 4) {
+                        Log::info("Pass 2 still has headroom. Final nudge Pass 3: {$dpi2} -> {$dpi3}...");
+                        $runGsPass($dpi3, $preset2, 'p3_nudge');
+                    }
                 }
             }
 
@@ -714,9 +767,10 @@ class PdfCompressionController extends Controller
                     if ($pRaster->isSuccessful() && file_exists($tempRasterOutput) && filesize($tempRasterOutput) > 0) {
                         $rSize = filesize($tempRasterOutput);
                         $candidates[] = [
-                            'path' => $tempRasterOutput,
-                            'size' => $rSize,
-                            'dpi'  => $rasterDpi,
+                            'path'   => $tempRasterOutput,
+                            'size'   => $rSize,
+                            'dpi'    => $rasterDpi,
+                            'preset' => 'rasterizer',
                         ];
                     }
                 } catch (\Throwable $e) {
@@ -724,31 +778,24 @@ class PdfCompressionController extends Controller
                 }
             }
 
-            // ── SELEKSI PEMENANG OPTIMAL (Target-Calibrated Selection) ──
+            // ── SELEKSI PEMENANG OPTIMAL (Precision Winner Selection) ──
             // Kriteria:
-            // 1. Ukuran HARUS <= targetBytes (tidak boleh melebihi target pengguna)
-            // 2. Ukuran HARUS < inputSize (harus terkompresi)
-            // 3. Di antara yang valid, prioritaskan yang berada di rentang [minTargetBytes, targetBytes]
-            // 4. Jika ada beberapa di rentang, pilih yang paling mendekati target (paling besar ukurannya = DPI paling tinggi & kualitas terbaik!)
-            // 5. Jika tidak ada yang >= minTargetBytes, pilih kandidat valid terbesar (kualitas paling tinggi di bawah batas)
+            // 1. Ukuran HARUS <= targetBytes (TIDAK BOLEH melebihi batas maksimal target pengguna / portal BPJS)
+            // 2. Ukuran HARUS < inputSize (berkas harus terkompresi / tidak membesar)
+            // 3. Di antara kandidat valid, pilih kandidat TERBESAR yang paling mendekati batas target (kualitas gambar, teks, dan barcode paling jernih)
             $validCandidates = array_filter($candidates, function($c) use ($targetBytes, $inputSize) {
-                return $c['size'] <= $targetBytes && $c['size'] < $inputSize && file_exists($c['path']);
+                return $c['size'] <= $targetBytes && $c['size'] < $inputSize && file_exists($c['path']) && $c['size'] > 0;
             });
 
             if (!empty($validCandidates)) {
-                usort($validCandidates, function($a, $b) use ($minTargetBytes) {
-                    $aInSweet = ($a['size'] >= $minTargetBytes);
-                    $bInSweet = ($b['size'] >= $minTargetBytes);
-
-                    if ($aInSweet && !$bInSweet) return -1;
-                    if (!$aInSweet && $bInSweet) return 1;
-
-                    // Di antara sesama sweet spot (atau sesama di bawah min), pilih yang paling besar (kualitas terbaik!)
+                usort($validCandidates, function($a, $b) {
                     return $b['size'] <=> $a['size'];
                 });
 
                 $winner = $validCandidates[0];
-                Log::info("🎯 Selected best compression: " . round($winner['size'] / 1048576, 2) . " MB at DPI " . $winner['dpi'] . " (Target: {$targetMb} MB, Min: " . round($minTargetBytes / 1048576, 2) . " MB)");
+                $winMb  = round($winner['size'] / 1048576, 2);
+                $winPct = round(($winner['size'] / $targetBytes) * 100, 1);
+                Log::info("🎯 Selected precision winner: {$winMb} MB ({$winPct}% of Target {$targetMb} MB) at DPI {$winner['dpi']}");
 
                 @unlink($output);
                 rename($winner['path'], $output);
@@ -1023,10 +1070,28 @@ class PdfCompressionController extends Controller
     {
         try {
             $pdf = new \setasign\Fpdi\Tcpdf\Fpdi();
-            return (int) $pdf->setSourceFile($filePath);
-        } catch (\Throwable) {
-            return 0;
-        }
+            $count = (int) $pdf->setSourceFile($filePath);
+            if ($count > 0) return $count;
+        } catch (\Throwable) {}
+
+        // Regex fallback untuk membaca /Count dari catalog/pages tree PDF
+        try {
+            $handle = @fopen($filePath, 'rb');
+            if ($handle) {
+                $content = fread($handle, min(2097152, filesize($filePath)));
+                fclose($handle);
+                if (preg_match_all('/\/Count\s+(\d+)/', $content, $matches)) {
+                    $maxCount = 0;
+                    foreach ($matches[1] as $cVal) {
+                        $cInt = (int) $cVal;
+                        if ($cInt > $maxCount) $maxCount = $cInt;
+                    }
+                    if ($maxCount > 0) return $maxCount;
+                }
+            }
+        } catch (\Throwable) {}
+
+        return 1;
     }
 
     private function calculateTargetDpi(float $targetMb): int
@@ -1036,54 +1101,33 @@ class PdfCompressionController extends Controller
     }
 
     /**
-     * Parameter resolusi & kompresi JPEG terkalibrasi presisi tinggi:
+     * Parameter resolusi & kompresi JPEG terkalibrasi presisi tinggi untuk fallback rasterizer:
      * Menyesuaikan DPI dan JPEG quality secara dinamis berdasarkan target ukuran dan jumlah halaman berkas.
      */
     private function calculateRasterParams(float $targetMb, ?string $inputPath = null): array
     {
-        $pageCount = $inputPath ? $this->getPdfPageCount($inputPath) : 0;
+        $pageCount = $inputPath ? $this->getPdfPageCount($inputPath) : 1;
+        $targetBytes = $targetMb * 1024 * 1024;
+        $safeTargetBytes = (int) ($targetBytes * 0.95);
+        $bytesPerPage = $safeTargetBytes / max(1, $pageCount);
 
-        if ($pageCount > 0) {
-            $targetBytes = $targetMb * 1024 * 1024;
-            // Anggarkan 88% dari target untuk batas aman yang presisi
-            $bytesPerPage = ($targetBytes * 0.88) / $pageCount;
-
-            if ($bytesPerPage >= 200000) {
-                return [135, 82]; // Sangat tajam mendekati dokumen asli (Kualitas Arsip)
-            } elseif ($bytesPerPage >= 140000) {
-                return [120, 78]; // Super jernih, teks halus & kurva sangat tajam
-            } elseif ($bytesPerPage >= 90000) {
-                return [105, 72]; // Standar rekomendasi, teks & barcode 100% jelas
-            } elseif ($bytesPerPage >= 55000) {
-                return [92, 66];  // Tajam & bersih, efisien
-            } elseif ($bytesPerPage >= 35000) {
-                return [80, 58];  // Tetap terbaca jelas untuk dokumen banyak halaman
-            } elseif ($bytesPerPage >= 22000) {
-                return [68, 48];  // Batas minimum aman untuk 80+ halaman
-            } else {
-                return [58, 40];  // Batas aman untuk 120+ halaman
-            }
+        if ($bytesPerPage >= 400000) {
+            return [150, 85];
+        } elseif ($bytesPerPage >= 250000) {
+            return [135, 80];
+        } elseif ($bytesPerPage >= 150000) {
+            return [120, 75];
+        } elseif ($bytesPerPage >= 90000) {
+            return [105, 70];
+        } elseif ($bytesPerPage >= 55000) {
+            return [90, 65];
+        } elseif ($bytesPerPage >= 35000) {
+            return [80, 58];
+        } elseif ($bytesPerPage >= 22000) {
+            return [70, 50];
+        } else {
+            return [60, 42];
         }
-
-        // Fallback jika pageCount tidak diketahui
-        if ($targetMb <= 8.0) {
-            $t = max(0.0, ($targetMb - 5.0) / 3.0);
-            $dpi = (int) round(72 + ($t * 18)); // 72 -> 90 DPI
-            $q   = (int) round(52 + ($t * 13)); // 52 -> 65 Q
-            return [$dpi, $q];
-        }
-
-        if ($targetMb <= 12.0) {
-            $t = ($targetMb - 8.0) / 4.0;
-            $dpi = (int) round(90 + ($t * 25)); // 90 -> 115 DPI
-            $q   = (int) round(65 + ($t * 10)); // 65 -> 75 Q
-            return [$dpi, $q];
-        }
-
-        $t = min(1.0, ($targetMb - 12.0) / 6.0);
-        $dpi = (int) round(115 + ($t * 20)); // 115 -> 135 DPI
-        $q   = (int) round(75 + ($t * 7));  // 75 -> 82 Q
-        return [$dpi, $q];
     }
 
     private function formatBytes(int $bytes): string
