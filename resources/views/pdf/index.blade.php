@@ -631,33 +631,42 @@
     .threshold-slider-container {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 6px;
     }
     .filter-range-slider {
-        accent-color: var(--accent-red);
+        accent-color: var(--primary);
     }
     .threshold-ticks {
-        display: flex;
-        justify-content: space-between;
-        font-size: 11px;
-        color: var(--text-muted);
-        padding: 0 2px;
-        overflow-x: auto;
+        position: relative;
+        width: 100%;
+        height: 24px;
+        margin-top: 4px;
     }
-    .threshold-ticks span {
+    .threshold-ticks .threshold-tick-item {
+        position: absolute;
+        top: 0;
         cursor: pointer;
         transition: all 0.15s ease;
-        padding: 2px 4px;
+        padding: 2px 5px;
         border-radius: 4px;
         white-space: nowrap;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-muted);
+        user-select: none;
     }
-    .threshold-ticks span:hover {
+    .threshold-ticks .threshold-tick-item:hover {
         color: var(--primary);
         background: var(--primary-light);
     }
-    .threshold-ticks span.preset-active {
-        font-weight: 800;
+    .threshold-ticks .threshold-tick-item.klaim-highlight {
         color: var(--accent-red);
+        font-weight: 700;
+    }
+    .threshold-ticks .threshold-tick-item.preset-active {
+        font-weight: 800 !important;
+        color: var(--accent-red) !important;
+        background: var(--accent-red-light) !important;
     }
 
     /* FILTER HEADER & NOTICE */
@@ -2042,27 +2051,6 @@
         </div>
 
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-            @if(!empty($gsAvailable))
-                <div class="db-history-btn" style="cursor: default; border-color: rgba(5, 150, 105, 0.3); background: rgba(5, 150, 105, 0.08);" title="Ghostscript terdeteksi dan aktif: {{ $gsPath }}">
-                    <span class="db-live-indicator" style="background: rgba(5, 150, 105, 0.2);"><span class="db-live-pulse" style="background: var(--accent-green);"></span></span>
-                    <i class="fa-solid fa-bolt" style="color: var(--accent-green);"></i>
-                    <span class="db-label-text" style="color: var(--text-primary);">Engine: <strong style="color: var(--accent-green);">Ghostscript Aktif</strong></span>
-                </div>
-            @else
-                <div class="db-history-btn" style="cursor: default; border-color: rgba(225, 29, 72, 0.3); background: rgba(225, 29, 72, 0.08);" title="Ghostscript belum terpasang di Linux. Jalankan: sudo apt install -y ghostscript">
-                    <span class="db-live-indicator" style="background: rgba(225, 29, 72, 0.2);"><span class="db-live-pulse" style="background: var(--accent-red);"></span></span>
-                    <i class="fa-solid fa-triangle-exclamation" style="color: var(--accent-red);"></i>
-                    <span class="db-label-text" style="color: var(--text-primary);">Engine: <strong style="color: var(--accent-red);">GS Belum Terpasang</strong></span>
-                </div>
-            @endif
-
-            <button type="button" class="db-history-btn" id="dbHistoryBtn" onclick="openDbHistoryModal()" title="Cek riwayat tersimpan di database presspdf">
-                <span class="db-live-indicator"><span class="db-live-pulse"></span></span>
-                <i class="fa-solid fa-database" style="color: #6366f1;"></i>
-                <span class="db-label-text">Database: <strong>{{ $dbDatabase ?? 'presspdf' }}</strong></span>
-                <span class="db-badge" id="topbarDbBadge">{{ $totalJobs ?? 1 }} Data</span>
-            </button>
-
             <button type="button" class="theme-toggle-btn" id="themeSwitchBtn" onclick="toggleThemeMode()">
                 <i class="fa-solid fa-circle-half-stroke"></i>
                 <span id="themeSwitchText">Mode Gelap</span>
@@ -2122,24 +2110,25 @@
                         <div class="threshold-val-counter" title="Ketik angka ambang batas (MB) atau geser slider di bawah">
                             <span class="threshold-val-prefix">&ge;</span>
                             <input type="number" id="thresholdNumberInput" min="1" max="500" value="34" class="threshold-number-input"
-                                   oninput="handleThresholdDirectInput(this.value)">
+                                   oninput="handleThresholdDirectInput(this.value)"
+                                   onblur="handleThresholdBlur(this)">
                             <span class="threshold-unit">MB</span>
                         </div>
                     </div>
 
                     <div class="threshold-slider-container">
                         <input type="range" class="modern-range-input filter-range-slider" id="thresholdSlider"
-                               min="5" max="100" step="1" value="34"
-                               oninput="handleThresholdSliderChange(this.value)">
+                               min="0" max="700" step="1" value="400"
+                               oninput="handleThresholdSliderStep(this.value)">
                         <div class="threshold-ticks">
-                            <span onclick="setThresholdVal(5)">5 MB</span>
-                            <span onclick="setThresholdVal(10)">10 MB</span>
-                            <span onclick="setThresholdVal(19)">19 MB (BPJS)</span>
-                            <span onclick="setThresholdVal(25)">25 MB</span>
-                            <span onclick="setThresholdVal(34)" style="font-weight: 800; color: var(--accent-red);">34 MB (Klaim)</span>
-                            <span onclick="setThresholdVal(50)">50 MB</span>
-                            <span onclick="setThresholdVal(75)">75 MB</span>
-                            <span onclick="setThresholdVal(100)">100 MB</span>
+                            <span class="threshold-tick-item" data-val="5" style="left: 0%; transform: translateX(0);" onclick="setThresholdVal(5)">5 MB</span>
+                            <span class="threshold-tick-item" data-val="10" style="left: 14.286%; transform: translateX(-50%);" onclick="setThresholdVal(10)">10 MB</span>
+                            <span class="threshold-tick-item" data-val="19" style="left: 28.571%; transform: translateX(-50%);" onclick="setThresholdVal(19)">19 MB (BPJS)</span>
+                            <span class="threshold-tick-item" data-val="25" style="left: 42.857%; transform: translateX(-50%);" onclick="setThresholdVal(25)">25 MB</span>
+                            <span class="threshold-tick-item klaim-highlight" data-val="34" style="left: 57.143%; transform: translateX(-50%);" onclick="setThresholdVal(34)">34 MB (Klaim)</span>
+                            <span class="threshold-tick-item" data-val="50" style="left: 71.429%; transform: translateX(-50%);" onclick="setThresholdVal(50)">50 MB</span>
+                            <span class="threshold-tick-item" data-val="75" style="left: 85.714%; transform: translateX(-50%);" onclick="setThresholdVal(75)">75 MB</span>
+                            <span class="threshold-tick-item" data-val="100" style="left: 100%; transform: translateX(-100%);" onclick="setThresholdVal(100)">100 MB</span>
                         </div>
                     </div>
                 </div>
@@ -2590,25 +2579,67 @@ if (activeTheme === 'dark-titanium') {
     document.getElementById('themeSwitchText').textContent = 'Mode Gelap';
 }
 
-function handleThresholdSliderChange(val) {
-    const num = Math.min(500, Math.max(1, parseFloat(val) || 34));
-    setThresholdVal(num);
+const THRESHOLD_PRESETS = [5, 10, 19, 25, 34, 50, 75, 100];
+
+function sliderStepToMb(stepVal) {
+    const val = Math.max(0, Math.min(700, parseFloat(stepVal) || 0));
+    if (val >= 700) return 100;
+    if (val <= 0) return 5;
+
+    const intervalIdx = Math.min(THRESHOLD_PRESETS.length - 2, Math.floor(val / 100));
+    const subPct = (val % 100) / 100;
+
+    const startMb = THRESHOLD_PRESETS[intervalIdx];
+    const endMb = THRESHOLD_PRESETS[intervalIdx + 1];
+    const calcMb = startMb + subPct * (endMb - startMb);
+    return Math.round(calcMb);
+}
+
+function mbToSliderStep(mb) {
+    const num = parseFloat(mb) || 34;
+    if (num <= THRESHOLD_PRESETS[0]) return 0;
+    if (num >= THRESHOLD_PRESETS[THRESHOLD_PRESETS.length - 1]) return 700;
+
+    for (let i = 0; i < THRESHOLD_PRESETS.length - 1; i++) {
+        if (num >= THRESHOLD_PRESETS[i] && num <= THRESHOLD_PRESETS[i + 1]) {
+            const fraction = (num - THRESHOLD_PRESETS[i]) / (THRESHOLD_PRESETS[i + 1] - THRESHOLD_PRESETS[i]);
+            return Math.round((i + fraction) * 100);
+        }
+    }
+    return 400; // default (34 MB)
+}
+
+function handleThresholdSliderStep(val) {
+    const mb = sliderStepToMb(val);
+    setThresholdVal(mb, false);
 }
 
 function handleThresholdDirectInput(val) {
-    const num = Math.min(500, Math.max(1, parseFloat(val) || 34));
-    setThresholdVal(num);
+    if (val === '' || isNaN(val)) return;
+    const num = Math.min(500, Math.max(1, parseFloat(val)));
+    setThresholdVal(num, true);
 }
 
-function setThresholdVal(val) {
+function handleThresholdBlur(input) {
+    if (!input.value || isNaN(input.value)) {
+        input.value = currentThresholdMb;
+    } else {
+        const num = Math.min(500, Math.max(1, parseFloat(input.value)));
+        setThresholdVal(num, true);
+    }
+}
+
+function setThresholdVal(val, updateSlider = true) {
     const num = Math.min(500, Math.max(1, parseFloat(val) || 34));
     currentThresholdMb = num;
     currentThresholdBytes = num * 1024 * 1024;
     localStorage.setItem('presspdf_threshold_mb', num);
 
-    const slider = document.getElementById('thresholdSlider');
-    if (slider && parseFloat(slider.value) !== num) {
-        slider.value = Math.min(100, Math.max(5, num));
+    if (updateSlider) {
+        const slider = document.getElementById('thresholdSlider');
+        if (slider) {
+            slider.value = mbToSliderStep(num);
+        }
     }
 
     const numberInput = document.getElementById('thresholdNumberInput');
@@ -2628,9 +2659,8 @@ function setThresholdVal(val) {
 
     // Update active highlight pada ticks preset
     document.querySelectorAll('.threshold-ticks span').forEach(span => {
-        const text = span.textContent || '';
-        const match = text.match(/^(\d+)\s*MB/i);
-        if (match && parseInt(match[1], 10) === num) {
+        const spanVal = parseInt(span.getAttribute('data-val'), 10);
+        if (spanVal === num) {
             span.classList.add('preset-active');
         } else {
             span.classList.remove('preset-active');
